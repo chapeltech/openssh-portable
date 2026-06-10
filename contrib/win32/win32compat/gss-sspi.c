@@ -70,6 +70,13 @@ gss_OID GSS_C_NT_HOSTBASED_SERVICE = &(gss_OID_desc)
 	(void *) GSS_C_NT_HOSTBASED_SERVICE_STR 
 };
 
+#define GSS_C_NT_USER_NAME_STR "\x2A\x86\x48\x86\xF7\x12\x01\x02\x01\x01"
+gss_OID GSS_C_NT_USER_NAME = &(gss_OID_desc)
+{
+	sizeof(GSS_C_NT_USER_NAME_STR) - 1,
+	(void *) GSS_C_NT_USER_NAME_STR
+};
+
 /* 
  * This handle is used to relay the handle for the user to functions that 
  * ultimately call CreateProcessAsUser to spawn the user shell.
@@ -108,6 +115,80 @@ ssh_gss_sspi_init(_Out_ OM_uint32 * minor_status)
 
 	/* success */
 	return 1;
+}
+
+static int
+ssh_gss_time_to_lifetime(TimeStamp expiry, OM_uint32 *time_rec)
+{
+	SYSTEMTIME current_time_system;
+	FILETIME current_time;
+
+	GetSystemTime(&current_time_system);
+	if (SystemTimeToFileTime(&current_time_system, &current_time) == 0) {
+		error("SystemTimeToFileTime failed with %d", GetLastError());
+		return 0;
+	}
+
+	*time_rec = (OM_uint32)(expiry.QuadPart -
+	    ((PLARGE_INTEGER)&current_time)->QuadPart) / 10000;
+	return 1;
+}
+
+static int
+ssh_gss_token_name(HANDLE token, gss_name_t *name)
+{
+	TOKEN_USER *token_user = NULL;
+	DWORD token_user_len = 0, account_len = 0, domain_len = 0;
+	wchar_t *account = NULL, *domain = NULL, *qualified = NULL;
+	SID_NAME_USE sid_type;
+	int ret = 0;
+
+	*name = GSS_C_NO_NAME;
+
+	if (GetTokenInformation(token, TokenUser, NULL, 0,
+	    &token_user_len) != 0 || token_user_len == 0)
+		goto done;
+	if ((token_user = malloc(token_user_len)) == NULL)
+		goto done;
+	if (GetTokenInformation(token, TokenUser, token_user, token_user_len,
+	    &token_user_len) == 0)
+		goto done;
+
+	(void)LookupAccountSidW(NULL, token_user->User.Sid, NULL,
+	    &account_len, NULL, &domain_len, &sid_type);
+	if (account_len == 0)
+		goto done;
+	if ((account = calloc(account_len + 1, sizeof(*account))) == NULL ||
+	    (domain = calloc(domain_len + 1, sizeof(*domain))) == NULL)
+		goto done;
+	if (LookupAccountSidW(NULL, token_user->User.Sid, account,
+	    &account_len, domain, &domain_len, &sid_type) == 0)
+		goto done;
+
+	if (domain[0] != L'\0') {
+		size_t qualified_len = wcslen(domain) + 1 + wcslen(account) + 1;
+
+		if ((qualified = calloc(qualified_len, sizeof(*qualified))) == NULL)
+			goto done;
+		if (swprintf(qualified, qualified_len, L"%ls\\%ls",
+		    domain, account) < 0)
+			goto done;
+	} else {
+		qualified = account;
+		account = NULL;
+	}
+
+	if ((*name = utf16_to_utf8(qualified)) == NULL)
+		goto done;
+
+	ret = 1;
+
+done:
+	free(token_user);
+	free(account);
+	free(domain);
+	free(qualified);
+	return ret;
 }
 
 /*
@@ -269,8 +350,10 @@ gss_import_name(_Out_ OM_uint32 * minor_status, _In_ gss_buffer_t input_name_buf
 		return GSS_S_FAILURE;
 
 	/* make sure we support the passed type */
-	if (input_name_type->length != GSS_C_NT_HOSTBASED_SERVICE->length ||
-	    memcmp(input_name_type->elements, GSS_C_NT_HOSTBASED_SERVICE->elements, input_name_type->length) != 0)
+	if ((input_name_type->length != GSS_C_NT_HOSTBASED_SERVICE->length ||
+	    memcmp(input_name_type->elements, GSS_C_NT_HOSTBASED_SERVICE->elements, input_name_type->length) != 0) &&
+	    (input_name_type->length != GSS_C_NT_USER_NAME->length ||
+	    memcmp(input_name_type->elements, GSS_C_NT_USER_NAME->elements, input_name_type->length) != 0))
 		return GSS_S_BAD_NAMETYPE;
 	
 	/* there is nothing special we have to do for this type so just duplicate
@@ -398,7 +481,6 @@ gss_acquire_cred(_Out_ OM_uint32 *minor_status, _In_opt_ gss_name_t desired_name
 	_Outptr_opt_ gss_cred_id_t * output_cred_handle, _Outptr_opt_ gss_OID_set *actual_mechs, _Out_opt_ OM_uint32 *time_rec)
 {
 	OM_uint32 ret = GSS_S_FAILURE;
-	SYSTEMTIME current_time_system;
 	wchar_t * desired_name_utf16 = NULL;
 	CredHandle cred_handle, *p_cred_handle = NULL;
 	
@@ -408,9 +490,6 @@ gss_acquire_cred(_Out_ OM_uint32 *minor_status, _In_opt_ gss_name_t desired_name
 
 	if (ssh_gss_sspi_init(minor_status) == 0)
 		goto done;
-
-	/* get the current time so we can determine expiration if requested */
-	GetSystemTime(&current_time_system);
 
 	/* translate credential usage parameters */
 	ULONG cred_usage_local = 0;
@@ -442,13 +521,8 @@ gss_acquire_cred(_Out_ OM_uint32 *minor_status, _In_opt_ gss_name_t desired_name
 	}
 	
 	/* determine expiration if requested */
-	if (time_rec != NULL) {
-		FILETIME current_time;
-		if (SystemTimeToFileTime(&current_time_system, &current_time) != 0)
-			*time_rec = (OM_uint32)(expiry.QuadPart - ((PLARGE_INTEGER)&current_time)->QuadPart) / 10000;
-		else
-			error("SystemTimeToFileTime failed with %d", GetLastError());
-	}
+	if (time_rec != NULL)
+		(void)ssh_gss_time_to_lifetime(expiry, time_rec);
 
 	/* set actual supported mechs if requested */
 	if (actual_mechs != NULL && gss_indicate_mechs(minor_status, actual_mechs) != GSS_S_COMPLETE)
@@ -468,6 +542,142 @@ done:
 	}
 
 	return ret;
+}
+
+OM_uint32
+gss_compare_name(_Out_ OM_uint32 * minor_status, _In_ const gss_name_t name1,
+	_In_ const gss_name_t name2, _Out_ int * name_equal)
+{
+	if (ssh_gss_sspi_init(minor_status) == 0)
+		return GSS_S_FAILURE;
+
+	if (name_equal == NULL)
+		return GSS_S_FAILURE;
+	*name_equal = 0;
+
+	if (name1 == GSS_C_NO_NAME || name2 == GSS_C_NO_NAME)
+		return GSS_S_BAD_NAME;
+
+	*name_equal = (_stricmp(name1, name2) == 0);
+	return GSS_S_COMPLETE;
+}
+
+OM_uint32
+gss_inquire_cred(_Out_ OM_uint32 * minor_status, _In_ const gss_cred_id_t cred_handle,
+	_Out_opt_ gss_name_t * name, _Out_opt_ OM_uint32 * lifetime,
+	_Out_opt_ gss_cred_usage_t * cred_usage, _Outptr_opt_ gss_OID_set * mechanisms)
+{
+	OM_uint32 ret = GSS_S_FAILURE;
+	CredHandle default_cred_handle;
+	CredHandle *p_cred_handle = NULL;
+	SecPkgCredentials_NamesW cred_names = { 0 };
+	TimeStamp expiry;
+	SECURITY_STATUS status;
+	int free_default_cred = 0;
+
+	if (name != NULL)
+		*name = GSS_C_NO_NAME;
+	if (lifetime != NULL)
+		*lifetime = 0;
+	if (cred_usage != NULL)
+		*cred_usage = 0;
+	if (mechanisms != NULL)
+		*mechanisms = GSS_C_NO_OID_SET;
+
+	if (ssh_gss_sspi_init(minor_status) == 0)
+		return GSS_S_FAILURE;
+
+	if (cred_handle != GSS_C_NO_CREDENTIAL)
+		return GSS_S_UNAVAILABLE;
+
+	status = SecFunctions->AcquireCredentialsHandleW(NULL,
+	    MICROSOFT_KERBEROS_NAME_W, SECPKG_CRED_OUTBOUND, NULL,
+	    NULL, NULL, NULL, &default_cred_handle, &expiry);
+	if (status != SEC_E_OK)
+		return GSS_S_NO_CRED;
+
+	free_default_cred = 1;
+	p_cred_handle = &default_cred_handle;
+	if (lifetime != NULL &&
+	    ssh_gss_time_to_lifetime(expiry, lifetime) == 0)
+		goto done;
+	if (cred_usage != NULL)
+		*cred_usage = GSS_C_INITIATE;
+
+	if (lifetime != NULL && *lifetime == 0) {
+		ret = GSS_S_CREDENTIALS_EXPIRED;
+		goto done;
+	}
+
+	if (name != NULL) {
+		if (SecFunctions->QueryCredentialsAttributesW(p_cred_handle,
+		    SECPKG_CRED_ATTR_NAMES, &cred_names) != SEC_E_OK)
+			goto done;
+		if ((*name = utf16_to_utf8(cred_names.sUserName)) == NULL)
+			goto done;
+	}
+
+	if (mechanisms != NULL &&
+	    gss_indicate_mechs(minor_status, mechanisms) != GSS_S_COMPLETE)
+		goto done;
+
+	ret = GSS_S_COMPLETE;
+
+done:
+	if (cred_names.sUserName != NULL)
+		SecFunctions->FreeContextBuffer(cred_names.sUserName);
+	if (free_default_cred)
+		SecFunctions->FreeCredentialsHandle(&default_cred_handle);
+	if (ret != GSS_S_COMPLETE) {
+		if (name != NULL && *name != GSS_C_NO_NAME) {
+			free(*name);
+			*name = GSS_C_NO_NAME;
+		}
+		if (mechanisms != NULL && *mechanisms != GSS_C_NO_OID_SET)
+			gss_release_oid_set(minor_status, mechanisms);
+	}
+
+	return ret;
+}
+
+OM_uint32
+gss_inquire_cred_by_mech(_Out_ OM_uint32 * minor_status,
+	_In_ const gss_cred_id_t cred_handle, _In_ const gss_OID mech_type,
+	_Out_opt_ gss_name_t * name, _Out_opt_ OM_uint32 * initiator_lifetime,
+	_Out_opt_ OM_uint32 * acceptor_lifetime,
+	_Out_opt_ gss_cred_usage_t * cred_usage)
+{
+	if (name != NULL)
+		*name = GSS_C_NO_NAME;
+	if (initiator_lifetime != NULL)
+		*initiator_lifetime = 0;
+	if (acceptor_lifetime != NULL)
+		*acceptor_lifetime = 0;
+	if (cred_usage != NULL)
+		*cred_usage = 0;
+
+	if (ssh_gss_sspi_init(minor_status) == 0)
+		return GSS_S_FAILURE;
+
+	if (mech_type->length != GSS_C_NT_HOSTBASED_SERVICE->length ||
+	    memcmp(mech_type->elements, GSS_C_NT_HOSTBASED_SERVICE->elements,
+	    mech_type->length) != 0)
+		return GSS_S_BAD_MECH;
+
+	if (cred_handle == GSS_C_NO_CREDENTIAL)
+		return gss_inquire_cred(minor_status, cred_handle, name,
+		    initiator_lifetime, cred_usage, NULL);
+
+	if (cred_handle->isToken == 0)
+		return GSS_S_UNAVAILABLE;
+
+	if (name != NULL &&
+	    ssh_gss_token_name(cred_handle->token, name) == 0)
+		return GSS_S_FAILURE;
+	if (cred_usage != NULL)
+		*cred_usage = GSS_C_INITIATE;
+
+	return GSS_S_COMPLETE;
 }
 
 /*
@@ -526,10 +736,6 @@ gss_init_sec_context(
 	/* setup output buffer - will be dynamically allocated by function */
 	SecBuffer output_buffer_token = { 0, SECBUFFER_TOKEN, NULL };
 	SecBufferDesc output_buffer = { SECBUFFER_VERSION, 1, &output_buffer_token };
-
-	/* get the current time so we can determine expiration if requested */
-	SYSTEMTIME current_time_system;
-	GetSystemTime(&current_time_system);
 
 	/* acquire default cred handler if none specified */
 	CredHandle *pCredHandle = NULL;
@@ -597,13 +803,8 @@ gss_init_sec_context(
 		debug("sspi delegation was requested but not fulfilled");
 
 	/* if requested, translate the expiration time to number of second */
-	if (time_rec != NULL) {
-		FILETIME current_time;
-		if (SystemTimeToFileTime(&current_time_system, &current_time) != 0)
-			*time_rec = (OM_uint32)(expiry.QuadPart - ((PLARGE_INTEGER)&current_time)->QuadPart) / 10000;
-		else
-			error("SystemTimeToFileTime failed with %d", GetLastError());
-	}
+	if (time_rec != NULL)
+		(void)ssh_gss_time_to_lifetime(expiry, time_rec);
 
 	/* if requested, return the supported mechanism oid */
 	if (actual_mech_type != NULL)
@@ -831,10 +1032,6 @@ gss_accept_sec_context(_Out_ OM_uint32 * minor_status, _Inout_opt_ gss_ctx_id_t 
 	SecBuffer output_buffer_token = { 0, SECBUFFER_TOKEN, NULL };
 	SecBufferDesc output_buffer = { SECBUFFER_VERSION, 1, &output_buffer_token };
 
-	/* get the current time so we can determine expiration if requested */
-	SYSTEMTIME current_time_system;
-	GetSystemTime(&current_time_system);
-
 	TimeStamp expiry;
 	CtxtHandle sspi_context_handle;
 	ULONG sspi_ret_flags = 0;
@@ -909,13 +1106,8 @@ gss_accept_sec_context(_Out_ OM_uint32 * minor_status, _Inout_opt_ gss_ctx_id_t 
 		*mech_type = GSS_C_NT_HOSTBASED_SERVICE;
 	
 	/* if requested, translate the expiration time to number of second */
-	if (time_rec != NULL) {
-		FILETIME current_time;
-		if (SystemTimeToFileTime(&current_time_system, &current_time) != 0)
-			*time_rec = (OM_uint32)(expiry.QuadPart - ((PLARGE_INTEGER)&current_time)->QuadPart) / 10000;
-		else
-			error("SystemTimeToFileTime failed with %d", GetLastError());
-	}
+	if (time_rec != NULL)
+		(void)ssh_gss_time_to_lifetime(expiry, time_rec);
 
 	/* only do checks on the finalized context (no continue needed) */
 	if (status == SEC_E_OK) {
@@ -1099,6 +1291,7 @@ ssh_gssapi_mech gssapi_kerberos_mech = {
 	{sizeof(GSS_C_NT_HOSTBASED_SERVICE_STR) - 1, GSS_C_NT_HOSTBASED_SERVICE_STR},
 	NULL,
 	&ssh_gssapi_krb5_userok,
+	NULL,
 	NULL,
 	NULL
 };
