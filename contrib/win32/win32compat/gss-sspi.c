@@ -813,6 +813,8 @@ gss_accept_sec_context(_Out_ OM_uint32 * minor_status, _Inout_opt_ gss_ctx_id_t 
 {
 	OM_uint32 ret = GSS_S_FAILURE;
 	gss_ctx_id_t p_ctx_h = NULL;
+	CredHandle *p_acceptor_cred_handle = NULL;
+	SECURITY_STATUS status;
 
 	*src_name = NULL;
 
@@ -821,6 +823,24 @@ gss_accept_sec_context(_Out_ OM_uint32 * minor_status, _Inout_opt_ gss_ctx_id_t 
 
 	if (ssh_gss_sspi_init(minor_status) == 0) 
 		goto done;
+
+	if (acceptor_cred_handle == GSS_C_NO_CREDENTIAL) {
+		static CredHandle default_cred_handle = { 0, 0 };
+		TimeStamp cred_expiry;
+
+		if (default_cred_handle.dwLower == 0 &&
+		    default_cred_handle.dwUpper == 0) {
+			status = SecFunctions->AcquireCredentialsHandleW(NULL,
+			    MICROSOFT_KERBEROS_NAME_W, SECPKG_CRED_INBOUND,
+			    NULL, NULL, NULL, NULL, &default_cred_handle,
+			    &cred_expiry);
+			if (status != SEC_E_OK)
+				goto done;
+		}
+		p_acceptor_cred_handle = &default_cred_handle;
+	} else {
+		p_acceptor_cred_handle = &acceptor_cred_handle->credHandle;
+	}
 
 	/* setup input buffer */
 	SecBuffer input_buffer_token = { (unsigned long) input_token_buffer->length, 
@@ -842,7 +862,7 @@ gss_accept_sec_context(_Out_ OM_uint32 * minor_status, _Inout_opt_ gss_ctx_id_t 
 		ASC_REQ_DELEGATE | ASC_REQ_SEQUENCE_DETECT | ASC_REQ_ALLOCATE_MEMORY;
 
 	/* call sspi accept security context function */
-	const SECURITY_STATUS status = SecFunctions->AcceptSecurityContext(&acceptor_cred_handle->credHandle, 
+	status = SecFunctions->AcceptSecurityContext(p_acceptor_cred_handle,
 		(*context_handle == GSS_C_NO_CONTEXT) ? NULL : *context_handle, &input_buffer,
 		sspi_req_flags, SECURITY_NATIVE_DREP, 
 		(*context_handle == GSS_C_NO_CONTEXT) ? &sspi_context_handle : *context_handle, 
