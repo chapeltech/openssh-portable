@@ -157,6 +157,9 @@ start_linux_sshd()
 {
 	echo "Starting Debian sshd test peer"
 	mkdir -p "$WORK/linux-etc" "$WORK/empty"
+	mkdir -p /usr/local/libexec
+	ln -sf "$SRC/sshd-session" /usr/local/libexec/sshd-session
+	ln -sf "$SRC/sshd-auth" /usr/local/libexec/sshd-auth
 	mkdir -p /var/empty
 	chown root:root /var/empty
 	chmod 755 /var/empty
@@ -186,15 +189,17 @@ PubkeyAuthentication no
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitEmptyPasswords no
-UsePAM no
 AllowUsers $USER_NAME
 StrictModes no
 Subsystem sftp $SRC/sftp-server
 EOF
 	pkill -f "$SRC/sshd.*$WORK/linux-sshd_config" >/dev/null 2>&1 || true
-	env KRB5_KTNAME="$WORK/linux.keytab" \
+	if ! env KRB5_KTNAME="$WORK/linux.keytab" \
 		"$SRC/sshd" -f "$WORK/linux-sshd_config" \
-		-E "$LOGDIR/linux-sshd.log"
+		-E "$LOGDIR/linux-sshd.log"; then
+		cat "$LOGDIR/linux-sshd.log" >&2 || true
+		exit 1
+	fi
 }
 
 create_linux_to_windows_key()
