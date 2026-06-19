@@ -8,7 +8,6 @@ $computerPassword = 'GssproxyHost!2026'
 $kdcHost = 'kdc1.example.com'
 $linuxHost = 'linux.example.com'
 $windowsHost = 'win.example.com'
-$kdcPort = 8888
 $linuxPort = 2222
 $windowsPort = 2223
 
@@ -61,13 +60,19 @@ function Remove-TestNrptRule() {
         }
 }
 
-function Start-TestLocator() {
+function Start-TestLocator([string]$WslIp) {
     $locator = Join-Path $repo '.github\scripts\gsskex-locator.py'
     $locatorLog = Join-Path $logRoot 'locator.log'
     $locatorOut = Join-Path $logRoot 'locator.out.log'
     $locatorErr = Join-Path $logRoot 'locator.err.log'
     $python = Get-Command python.exe -ErrorAction SilentlyContinue
-    $locatorArgs = @($locator, '--realm', $realm, '--log', $locatorLog)
+    $locatorArgs = @(
+        $locator,
+        '--realm', $realm,
+        '--kdc-udp-target', $WslIp,
+        '--kdc-udp-port', '88',
+        '--log', $locatorLog
+    )
 
     if (-not $python) {
         $python = Get-Command py.exe -ErrorAction Stop
@@ -99,6 +104,10 @@ function Start-TestLocator() {
         -ErrorAction SilentlyContinue |
         Format-List |
         Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
+    Get-NetUDPEndpoint -LocalAddress 127.0.0.1 -LocalPort 88 `
+        -ErrorAction SilentlyContinue |
+        Format-List |
+        Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
 }
 
 function Stop-TestLocator() {
@@ -107,26 +116,6 @@ function Stop-TestLocator() {
             -ErrorAction SilentlyContinue
     }
     Remove-TestNrptRule
-}
-
-function Remove-KdcPortProxy() {
-    & netsh.exe interface portproxy delete v4tov4 `
-        listenaddress=127.0.0.1 listenport=88 |
-        Out-Null
-}
-
-function Start-KdcPortProxy() {
-    Remove-KdcPortProxy
-    & netsh.exe interface portproxy add v4tov4 `
-        listenaddress=127.0.0.1 listenport=88 `
-        connectaddress=127.0.0.1 connectport=$kdcPort |
-        Out-Null
-    & netsh.exe interface portproxy show all |
-        Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
-    Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 88 `
-        -ErrorAction SilentlyContinue |
-        Format-List |
-        Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
 }
 
 function Compile-RunNetonly() {
@@ -324,7 +313,7 @@ try {
         throw "Linux setup failed with $LASTEXITCODE"
     }
 
-    Start-TestLocator
+    Start-TestLocator $wslIp
     Get-DnsClientNrptRule |
         Where-Object { $_.Comment -eq 'OpenSSH GSS KEX test' } |
         Format-List |
@@ -334,10 +323,6 @@ try {
         Format-List |
         Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
     & nltest.exe "/dsgetdc:$realm" /force |
-        Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
-    Start-KdcPortProxy
-    Test-NetConnection -ComputerName 127.0.0.1 -Port $kdcPort |
-        Format-List |
         Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
     Test-NetConnection -ComputerName $kdcHost -Port 88 |
         Format-List |
@@ -422,7 +407,6 @@ try {
     Write-Output 'Windows/Linux forced GSSAPIKeyExchange tests passed with empty known_hosts'
 } finally {
     Stop-TestLocator
-    Remove-KdcPortProxy
     Collect-InteropLogs
     Stop-TestSshd
     if (Test-Path (Join-Path $repo '.github\scripts\gsskex-wsl-linux.sh')) {

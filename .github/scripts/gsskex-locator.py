@@ -7,6 +7,7 @@
 import argparse
 import ipaddress
 import logging
+import socket
 import socketserver
 import struct
 import threading
@@ -218,6 +219,23 @@ class LdapHandler(socketserver.BaseRequestHandler):
         sock.sendto(entry + done, self.client_address)
 
 
+class KdcUdpProxyHandler(socketserver.BaseRequestHandler):
+    def handle(self):
+        data, sock = self.request
+        server = self.server
+        logging.info(
+            "KDC UDP proxy %s bytes from %s", len(data), self.client_address)
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as upstream:
+            upstream.settimeout(5)
+            upstream.sendto(data, (server.target_host, server.target_port))
+            try:
+                response, _ = upstream.recvfrom(65535)
+            except socket.timeout:
+                logging.info("KDC UDP proxy upstream timeout")
+                return
+        sock.sendto(response, self.client_address)
+
+
 class ThreadedUdpServer(socketserver.ThreadingMixIn, socketserver.UDPServer):
     allow_reuse_address = True
 
@@ -230,6 +248,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--realm", required=True)
     parser.add_argument("--listen", default="127.0.0.1")
+    parser.add_argument("--kdc-udp-target")
+    parser.add_argument("--kdc-udp-port", type=int, default=88)
     parser.add_argument("--log", required=True)
     args = parser.parse_args()
 
@@ -262,7 +282,14 @@ def main():
     ldap = ThreadedUdpServer((listen, 389), LdapHandler)
     ldap.netlogon_blob = netlogon_response(realm, dc_host)
 
-    for server in (dns_udp, dns_tcp, ldap):
+    servers = [dns_udp, dns_tcp, ldap]
+    if args.kdc_udp_target:
+        kdc_udp = ThreadedUdpServer((listen, 88), KdcUdpProxyHandler)
+        kdc_udp.target_host = args.kdc_udp_target
+        kdc_udp.target_port = args.kdc_udp_port
+        servers.append(kdc_udp)
+
+    for server in servers:
         threading.Thread(target=server.serve_forever, daemon=True).start()
     logging.info("locator started for %s on %s", realm, listen)
     threading.Event().wait()
