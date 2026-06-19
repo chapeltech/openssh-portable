@@ -79,7 +79,7 @@ function Invoke-NetonlyCommand(
         (Quote-CmdArg $Log) + ' 2>&1'
     Set-Content -Path $cmdFile -Encoding ASCII -Value @(
         '@echo off',
-        'cd /d ' + (Quote-CmdArg $testRoot),
+        ('cd /d ' + (Quote-CmdArg $testRoot)),
         $commandLine,
         'exit /b %ERRORLEVEL%'
     )
@@ -256,10 +256,11 @@ try {
     Set-Content -Path $globalKnownHosts -Value '' -NoNewline
 
     $winSsh = Join-Path $buildDir 'ssh.exe'
+    $winKlist = Join-Path $env:SystemRoot 'System32\klist.exe'
     $winKlistLog = Join-Path $logRoot 'windows-klist-linux.log'
     Write-Output 'Checking Windows Kerberos service ticket for Debian sshd'
     Invoke-NetonlyCommand -Name 'windows-klist-linux' `
-        -CommandArgs @('klist.exe', 'get', "host/$linuxHost") `
+        -CommandArgs @($winKlist, 'get', "host/$linuxHost") `
         -Log $winKlistLog
 
     $winToLinuxLog = Join-Path $logRoot 'windows-to-linux-ssh.log'
