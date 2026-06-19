@@ -9,6 +9,7 @@ COMPUTER_PASSWORD=${COMPUTER_PASSWORD:-GssproxyHost!2026}
 KDC_HOST=kdc1.example.com
 LINUX_HOST=linux.example.com
 WINDOWS_HOST=win.example.com
+KDC_PORT=8888
 WORK=/tmp/openssh-gsskex-interop
 LOGDIR=$WORK/logs
 SRC=$WORK/src
@@ -83,7 +84,7 @@ init_heimdal()
 	add_host 127.0.0.1 "$KDC_HOST"
 	add_host "$wsl_ip" "$LINUX_HOST"
 	add_host "$win_ip" "$WINDOWS_HOST"
-	write_krb5_conf 127.0.0.1
+	write_krb5_conf 127.0.0.1:$KDC_PORT
 	cp /etc/hosts "$LOGDIR/hosts"
 	cp /etc/krb5.conf "$LOGDIR/krb5.conf"
 	cat > /etc/heimdal-kdc/kdc.conf <<EOF
@@ -115,7 +116,7 @@ EOF
 	fi
 	kadmin -l ext_keytab --keytab="$WORK/linux.keytab" "host/$LINUX_HOST"
 
-	/usr/lib/heimdal-servers/kdc --addresses=0.0.0.0 --ports=88 \
+	/usr/lib/heimdal-servers/kdc --addresses=0.0.0.0 --ports=$KDC_PORT \
 		>"$LOGDIR/kdc.stdout.log" 2>"$LOGDIR/kdc.stderr.log" &
 	echo $! > "$WORK/kdc.pid"
 	echo "Waiting for Debian Heimdal KDC readiness"
