@@ -8,7 +8,6 @@ $computerPassword = 'GssproxyHost!2026'
 $kdcHost = 'kdc1.example.com'
 $linuxHost = 'linux.example.com'
 $windowsHost = 'win.example.com'
-$kdcPort = 8888
 $linuxPort = 2222
 $windowsPort = 2223
 
@@ -249,16 +248,6 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Linux setup failed with $LASTEXITCODE"
     }
-    & netsh interface portproxy delete v4tov4 `
-        listenaddress=127.0.0.1 listenport=88 | Out-Null
-    & netsh interface portproxy add v4tov4 `
-        listenaddress=127.0.0.1 listenport=88 `
-        connectaddress=$wslIp connectport=$kdcPort | Out-Null
-    & netsh interface portproxy show all |
-        Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
-    Test-NetConnection -ComputerName $wslIp -Port $kdcPort |
-        Format-List |
-        Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
     Test-NetConnection -ComputerName $kdcHost -Port 88 |
         Format-List |
         Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
@@ -344,8 +333,6 @@ try {
 } finally {
     Collect-InteropLogs
     Stop-TestSshd
-    & netsh interface portproxy delete v4tov4 `
-        listenaddress=127.0.0.1 listenport=88 | Out-Null
     if (Test-Path (Join-Path $repo '.github\scripts\gsskex-wsl-linux.sh')) {
         try {
             $linuxScript = Convert-ToWslPath (Join-Path $repo '.github\scripts\gsskex-wsl-linux.sh')
