@@ -65,8 +65,8 @@ function Compile-RunNetonly() {
     $cmd = 'call ' + (Quote-CmdArg $vcvars) + ' >nul && cl /nologo /W4 /O2 ' +
         (Quote-CmdArg $source) + ' /Fe:' + (Quote-CmdArg $out) +
         ' advapi32.lib'
-    Invoke-Checked cmd.exe @('/c', $cmd)
-    $out
+    $null = Invoke-Checked cmd.exe @('/c', $cmd)
+    return $out
 }
 
 function Invoke-NetonlyCommand(
