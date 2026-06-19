@@ -31,6 +31,20 @@ add_host()
 	fi
 }
 
+run_logged()
+{
+	name=$1
+	log=$2
+	shift 2
+
+	echo "$name"
+	if ! "$@" >"$log" 2>&1; then
+		echo "$name failed; last log lines:" >&2
+		tail -200 "$log" >&2 || true
+		exit 1
+	fi
+}
+
 write_krb5_conf()
 {
 	kdc_addr=$1
@@ -64,9 +78,10 @@ init_heimdal()
 
 	echo "Setting up Debian Heimdal KDC"
 	mkdir -p "$WORK" "$LOGDIR" /etc/heimdal-kdc /var/lib/heimdal-kdc
-	add_host "$wsl_ip" "$KDC_HOST $LINUX_HOST"
+	add_host 127.0.0.1 "$KDC_HOST"
+	add_host "$wsl_ip" "$LINUX_HOST"
 	add_host "$win_ip" "$WINDOWS_HOST"
-	write_krb5_conf "$KDC_HOST"
+	write_krb5_conf 127.0.0.1
 	cat > /etc/heimdal-kdc/kdc.conf <<EOF
 [logging]
 	kdc = FILE:$LOGDIR/heimdal-kdc.log
@@ -99,9 +114,10 @@ EOF
 	/usr/lib/heimdal-servers/kdc --addresses=0.0.0.0 --ports=88 \
 		>"$LOGDIR/kdc.stdout.log" 2>"$LOGDIR/kdc.stderr.log" &
 	echo $! > "$WORK/kdc.pid"
+	echo "Waiting for Debian Heimdal KDC readiness"
 	for _ in 1 2 3 4 5 6 7 8 9 10; do
 		if printf '%s\n' "$USER_PASSWORD" |
-		    kinit "$USER_NAME@$REALM" >/dev/null 2>&1; then
+		    timeout 5s kinit "$USER_NAME@$REALM" >/dev/null 2>&1; then
 			kdestroy >/dev/null 2>&1 || true
 			return
 		fi
@@ -121,14 +137,13 @@ build_linux_openssh()
 	mkdir -p "$SRC"
 	tar -xf "$source_tar" -C "$SRC"
 	cd "$SRC"
-	echo "Running autoreconf for Debian OpenSSH build"
-	autoreconf
-	echo "Configuring Debian OpenSSH build with Heimdal"
-	./configure --with-kerberos5=/usr --with-libedit \
-		>"$LOGDIR/configure-linux.log" 2>&1
-	echo "Building Debian OpenSSH"
-	make -j"$(nproc)" \
-		>"$LOGDIR/make-linux.log" 2>&1
+	run_logged "Running autoreconf for Debian OpenSSH build" \
+		"$LOGDIR/autoreconf-linux.log" timeout 5m autoreconf
+	run_logged "Configuring Debian OpenSSH build with Heimdal" \
+		"$LOGDIR/configure-linux.log" timeout 5m \
+		./configure --with-kerberos5=/usr --with-libedit
+	run_logged "Building Debian OpenSSH" "$LOGDIR/make-linux.log" \
+		timeout 15m make -j"$(nproc)"
 	./ssh -V 2>"$LOGDIR/linux-ssh-version.log" || true
 }
 
@@ -205,7 +220,7 @@ linux_to_windows()
 	: > "$global_known"
 	: > "$empty_config"
 	log=$LOGDIR/linux-to-windows-ssh.log
-	"$SRC/ssh" -vvv \
+	if ! timeout 2m "$SRC/ssh" -vvv \
 		-F "$empty_config" \
 		-o BatchMode=yes \
 		-o StrictHostKeyChecking=yes \
@@ -226,7 +241,10 @@ linux_to_windows()
 		-o ConnectionAttempts=1 \
 		-p "$WINDOWS_PORT" "$USER_NAME@$WINDOWS_HOST" \
 		cmd.exe /c echo linux-to-windows-gsskex-ok \
-		>"$LOGDIR/linux-to-windows.out" 2>"$log"
+		>"$LOGDIR/linux-to-windows.out" 2>"$log"; then
+		cat "$log" >&2 || true
+		exit 1
+	fi
 	assert_gss_kex linux-to-windows "$log"
 	grep -q 'linux-to-windows-gsskex-ok' "$LOGDIR/linux-to-windows.out"
 	test ! -s "$known"
