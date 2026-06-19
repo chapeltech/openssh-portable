@@ -118,6 +118,8 @@ EOF
 		"host/$WINDOWS_HOST"
 	if [ -n "$win_computer" ]; then
 		kadmin -l add --use-defaults --password="$COMPUTER_PASSWORD" \
+			"$win_computer$" || true
+		kadmin -l add --use-defaults --password="$COMPUTER_PASSWORD" \
 			"host/$win_computer" || true
 	fi
 	kadmin -l ext_keytab --keytab="$WORK/linux.keytab" "host/$LINUX_HOST"
