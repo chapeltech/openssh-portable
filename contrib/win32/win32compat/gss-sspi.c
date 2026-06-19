@@ -202,6 +202,34 @@ done:
 	return ret;
 }
 
+static int
+ssh_gssapi_sspi_user_matches(const char *displayname, const char *username)
+{
+	char computer[MAX_COMPUTERNAME_LENGTH + 1];
+	DWORD computer_len = sizeof(computer);
+	const char *slash;
+	size_t domain_len;
+
+	if (displayname == NULL || username == NULL)
+		return 0;
+	if (_stricmp(displayname, username) == 0)
+		return 1;
+
+	slash = strrchr(displayname, '\\');
+	if (slash == NULL || _stricmp(slash + 1, username) != 0)
+		return 0;
+
+	if (GetComputerNameA(computer, &computer_len) == 0) {
+		debug("%s: GetComputerNameA failed: %lu", __FUNCTION__,
+		    GetLastError());
+		return 0;
+	}
+
+	domain_len = slash - displayname;
+	return domain_len == strlen(computer) &&
+	    _strnicmp(displayname, computer, domain_len) == 0;
+}
+
 /*
  * Allows an application to determine which underlying security mechanisms are
  * available.
@@ -1308,7 +1336,8 @@ ssh_gssapi_krb5_userok(ssh_gssapi_client *client, char *name)
 		error("sspi getpwnam failed to get user from user-provided, resolved user '%s'", name);
 		return 0;
 	}
-	if (_stricmp(client->displayname.value, user->pw_name) != 0) {
+	if (ssh_gssapi_sspi_user_matches(client->displayname.value,
+	    user->pw_name) == 0) {
 		/* check failed */
 		debug("sspi user '%s' did not match user-provided, resolved user '%s'", 
 			(char *) client->displayname.value, name);
