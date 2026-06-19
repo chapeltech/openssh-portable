@@ -25,6 +25,38 @@ function Invoke-Checked([string]$File, [string[]]$Arguments) {
     }
 }
 
+function Invoke-LoggedProcess(
+    [string]$Name,
+    [string]$File,
+    [string[]]$Arguments,
+    [int]$TimeoutSeconds
+) {
+    $stdout = Join-Path $logRoot "$Name.stdout.log"
+    $stderr = Join-Path $logRoot "$Name.stderr.log"
+    Remove-Item $stdout, $stderr -Force -ErrorAction SilentlyContinue
+
+    Write-Output "Running $Name with ${TimeoutSeconds}s timeout"
+    $process = Start-Process `
+        -FilePath $File `
+        -ArgumentList $Arguments `
+        -PassThru `
+        -NoNewWindow `
+        -RedirectStandardOutput $stdout `
+        -RedirectStandardError $stderr
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+        if (Test-Path $stdout) { Get-Content $stdout | Select-Object -Last 200 }
+        if (Test-Path $stderr) { Get-Content $stderr | Select-Object -Last 200 }
+        throw "$Name timed out after $TimeoutSeconds seconds"
+    }
+
+    if (Test-Path $stdout) { Get-Content $stdout }
+    if (Test-Path $stderr) { Get-Content $stderr }
+    if ($process.ExitCode -ne 0) {
+        throw "$Name failed with exit code $($process.ExitCode)"
+    }
+}
+
 function Quote-CmdArg([string]$Arg) {
     '"' + ($Arg -replace '"', '\"') + '"'
 }
@@ -263,8 +295,19 @@ Subsystem sftp $sftpServer
     & sc.exe privs sshd `
         SeAssignPrimaryTokenPrivilege/SeTcbPrivilege/SeBackupPrivilege/SeRestorePrivilege/SeImpersonatePrivilege |
         Out-Null
-    Start-Service sshd
-    Start-Sleep -Seconds 2
+    $startLog = Join-Path $logRoot 'windows-sshd-start.log'
+    & sc.exe start sshd | Tee-Object -FilePath $startLog -Append | Out-Null
+    $deadline = (Get-Date).AddSeconds(20)
+    do {
+        $service = Get-Service sshd -ErrorAction Stop
+        if ($service.Status -eq 'Running') {
+            break
+        }
+        if ($service.Status -eq 'Stopped') {
+            break
+        }
+        Start-Sleep -Milliseconds 500
+    } while ((Get-Date) -lt $deadline)
     if ((Get-Service sshd).Status -ne 'Running') {
         if (Test-Path $serverLog) {
             Get-Content $serverLog
@@ -339,13 +382,14 @@ try {
     $sourceTarWsl = Convert-ToWslPath $sourceTar
     $computerLower = $env:COMPUTERNAME.ToLowerInvariant()
     Write-Output 'Running Debian Heimdal/OpenSSH setup in WSL'
-    & wsl.exe -u root -- env `
-        "USER_PASSWORD=$userPassword" `
-        "COMPUTER_PASSWORD=$computerPassword" `
-        bash $linuxScript setup $sourceTarWsl $wslIp $windowsIp $computerLower
-    if ($LASTEXITCODE -ne 0) {
-        throw "Linux setup failed with $LASTEXITCODE"
-    }
+    Invoke-LoggedProcess -Name 'linux-setup' -File 'wsl.exe' -TimeoutSeconds 1500 `
+        -Arguments @(
+            '-u', 'root', '--', 'env',
+            "USER_PASSWORD=$userPassword",
+            "COMPUTER_PASSWORD=$computerPassword",
+            'bash', $linuxScript, 'setup', $sourceTarWsl, $wslIp,
+            $windowsIp, $computerLower
+        )
     & wsl.exe --distribution Debian-12 --user root -- python3 -c `
         "import socket; socket.create_connection(('127.0.0.1', 88), 5).close(); print('wsl-kdc-tcp-ok')"
     if ($LASTEXITCODE -ne 0) {
@@ -433,11 +477,12 @@ try {
     Start-WindowsSshd
 
     Write-Output 'Running Debian client to Windows sshd GSS KEX test'
-    & wsl.exe -u root -- env "USER_PASSWORD=$userPassword" `
-        bash $linuxScript linux-to-windows
-    if ($LASTEXITCODE -ne 0) {
-        throw "Linux to Windows SSH failed with $LASTEXITCODE"
-    }
+    Invoke-LoggedProcess -Name 'linux-to-windows' -File 'wsl.exe' `
+        -TimeoutSeconds 240 `
+        -Arguments @(
+            '-u', 'root', '--', 'env', "USER_PASSWORD=$userPassword",
+            'bash', $linuxScript, 'linux-to-windows'
+        )
 
     Collect-InteropLogs
 
