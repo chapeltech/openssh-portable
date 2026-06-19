@@ -57,41 +57,57 @@ def dns_rr(name, qtype, payload, ttl=300):
     )
 
 
-class DnsHandler(socketserver.BaseRequestHandler):
+def dns_response(data, server):
+    tid, flags, qdcount, _, _, _ = struct.unpack("!HHHHHH", data[:12])
+    offset = 12
+    questions = []
+    answers = []
+
+    for _ in range(qdcount):
+        qname, offset = dns_read_name(data, offset)
+        qtype, qclass = struct.unpack("!HH", data[offset:offset + 4])
+        offset += 4
+        questions.append(data[12:offset])
+        qlower = qname.lower()
+        logging.info("DNS %s type %s", qlower, qtype)
+
+        if qclass != CLASS_IN:
+            continue
+        if qtype == TYPE_A and qlower in server.a_records:
+            answers.append(dns_rr(qname, TYPE_A, server.a_records[qlower].packed))
+        elif qtype == TYPE_SRV and qlower in server.srv_records:
+            target, port = server.srv_records[qlower]
+            payload = struct.pack("!HHH", 0, 100, port) + dns_pack_name(target)
+            answers.append(dns_rr(qname, TYPE_SRV, payload))
+
+    rcode = 0 if answers else 3
+    response = bytearray()
+    response.extend(struct.pack(
+        "!HHHHHH", tid, 0x8580 | rcode, qdcount, len(answers), 0, 0))
+    for question in questions:
+        response.extend(question)
+    for answer in answers:
+        response.extend(answer)
+    return bytes(response)
+
+
+class DnsUdpHandler(socketserver.BaseRequestHandler):
     def handle(self):
         data, sock = self.request
-        server = self.server
-        tid, flags, qdcount, _, _, _ = struct.unpack("!HHHHHH", data[:12])
-        offset = 12
-        questions = []
-        answers = []
+        sock.sendto(dns_response(data, self.server), self.client_address)
 
-        for _ in range(qdcount):
-            qname, offset = dns_read_name(data, offset)
-            qtype, qclass = struct.unpack("!HH", data[offset:offset + 4])
-            offset += 4
-            questions.append(data[12:offset])
-            qlower = qname.lower()
-            logging.info("DNS %s type %s", qlower, qtype)
 
-            if qclass != CLASS_IN:
-                continue
-            if qtype == TYPE_A and qlower in server.a_records:
-                answers.append(dns_rr(qname, TYPE_A, server.a_records[qlower].packed))
-            elif qtype == TYPE_SRV and qlower in server.srv_records:
-                target, port = server.srv_records[qlower]
-                payload = struct.pack("!HHH", 0, 100, port) + dns_pack_name(target)
-                answers.append(dns_rr(qname, TYPE_SRV, payload))
-
-        rcode = 0 if answers else 3
-        response = bytearray()
-        response.extend(struct.pack(
-            "!HHHHHH", tid, 0x8580 | rcode, qdcount, len(answers), 0, 0))
-        for question in questions:
-            response.extend(question)
-        for answer in answers:
-            response.extend(answer)
-        sock.sendto(bytes(response), self.client_address)
+class DnsTcpHandler(socketserver.StreamRequestHandler):
+    def handle(self):
+        length_raw = self.rfile.read(2)
+        if len(length_raw) != 2:
+            return
+        length = struct.unpack("!H", length_raw)[0]
+        data = self.rfile.read(length)
+        if len(data) != length:
+            return
+        response = dns_response(data, self.server)
+        self.wfile.write(struct.pack("!H", len(response)) + response)
 
 
 def ber_len(length):
@@ -206,6 +222,10 @@ class ThreadedUdpServer(socketserver.ThreadingMixIn, socketserver.UDPServer):
     allow_reuse_address = True
 
 
+class ThreadedTcpServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    allow_reuse_address = True
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--realm", required=True)
@@ -222,22 +242,27 @@ def main():
     dc_host = f"dc01.{realm}"
     listen = args.listen
 
-    dns = ThreadedUdpServer((listen, 53), DnsHandler)
-    dns.a_records = {
+    a_records = {
         dc_host: ipaddress.ip_address(listen),
         f"kdc1.{realm}": ipaddress.ip_address(listen),
     }
-    dns.srv_records = {
+    srv_records = {
         f"_kerberos._tcp.dc._msdcs.{realm}": (dc_host, 88),
         f"_ldap._tcp.dc._msdcs.{realm}": (dc_host, 389),
         f"_kerberos._tcp.{realm}": (dc_host, 88),
         f"_kerberos._udp.{realm}": (dc_host, 88),
     }
 
+    dns_udp = ThreadedUdpServer((listen, 53), DnsUdpHandler)
+    dns_tcp = ThreadedTcpServer((listen, 53), DnsTcpHandler)
+    for dns in (dns_udp, dns_tcp):
+        dns.a_records = a_records
+        dns.srv_records = srv_records
+
     ldap = ThreadedUdpServer((listen, 389), LdapHandler)
     ldap.netlogon_blob = netlogon_response(realm, dc_host)
 
-    for server in (dns, ldap):
+    for server in (dns_udp, dns_tcp, ldap):
         threading.Thread(target=server.serve_forever, daemon=True).start()
     logging.info("locator started for %s on %s", realm, listen)
     threading.Event().wait()
