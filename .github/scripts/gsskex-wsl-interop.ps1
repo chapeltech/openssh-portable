@@ -25,6 +25,37 @@ function Invoke-Checked([string]$File, [string[]]$Arguments) {
     }
 }
 
+function Invoke-Ksetup([string[]]$Arguments) {
+    $ksetupLog = Join-Path $logRoot 'ksetup.log'
+    $displayArguments = $Arguments
+    if ($Arguments.Length -gt 0 -and
+        $Arguments[0].Equals('/setcomputerpassword',
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+        $displayArguments = @($Arguments[0], '<redacted>')
+    }
+
+    "ksetup $($displayArguments -join ' ')" |
+        Out-File -FilePath $ksetupLog -Append -Encoding ASCII
+    & ksetup.exe @Arguments 2>&1 |
+        Tee-Object -FilePath $ksetupLog -Append
+    if ($LASTEXITCODE -ne 0) {
+        throw "ksetup $($displayArguments -join ' ') failed with exit code $LASTEXITCODE"
+    }
+}
+
+function Configure-WindowsKerberos([string]$ComputerHost) {
+    Write-Output 'Configuring Windows Kerberos realm for sshd acceptor credentials'
+    Invoke-Ksetup -Arguments @('/setrealm', $realm)
+    Invoke-Ksetup -Arguments @('/addkdc', $realm, $kdcHost)
+    Invoke-Ksetup -Arguments @('/addhosttorealmmap', $ComputerHost, $realm)
+    Invoke-Ksetup -Arguments @('/addhosttorealmmap',
+        (".$realm").ToLowerInvariant(), $realm)
+    Invoke-Ksetup -Arguments @('/setcomputerpassword', $computerPassword)
+    & ksetup.exe /dumpstate 2>&1 |
+        Out-File -FilePath (Join-Path $logRoot 'ksetup.log') -Append `
+        -Encoding ASCII
+}
+
 function Invoke-LoggedProcess(
     [string]$Name,
     [string]$File,
@@ -387,6 +418,7 @@ try {
             '-u', 'root', '--', 'env',
             "USER_PASSWORD=$userPassword",
             "COMPUTER_PASSWORD=$computerPassword",
+            "WINDOWS_HOST=$computerLower",
             'bash', $linuxScript, 'setup', $sourceTarWsl, $wslIp,
             $windowsIp, $computerLower
         )
@@ -410,6 +442,7 @@ try {
     Test-NetConnection -ComputerName $kdcHost -Port 88 |
         Format-List |
         Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
+    Configure-WindowsKerberos $computerLower
 
     Write-Output 'Compiling run_netonly helper'
     $script:runNetonly = Compile-RunNetonly
@@ -481,6 +514,7 @@ try {
         -TimeoutSeconds 240 `
         -Arguments @(
             '-u', 'root', '--', 'env', "USER_PASSWORD=$userPassword",
+            "WINDOWS_HOST=$computerLower",
             'bash', $linuxScript, 'linux-to-windows'
         )
 

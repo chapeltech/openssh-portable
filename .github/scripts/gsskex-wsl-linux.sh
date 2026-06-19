@@ -8,7 +8,7 @@ USER_PASSWORD=${USER_PASSWORD:-GssproxyUser!2026}
 COMPUTER_PASSWORD=${COMPUTER_PASSWORD:-GssproxyHost!2026}
 KDC_HOST=kdc1.example.com
 LINUX_HOST=linux.example.com
-WINDOWS_HOST=win.example.com
+WINDOWS_HOST=${WINDOWS_HOST:-win.example.com}
 KDC_PORT=88
 WORK=/tmp/openssh-gsskex-interop
 LOGDIR=$WORK/logs
@@ -84,6 +84,9 @@ init_heimdal()
 	add_host 127.0.0.1 "$KDC_HOST"
 	add_host "$wsl_ip" "$LINUX_HOST"
 	add_host "$win_ip" "$WINDOWS_HOST"
+	if [ -n "$win_computer" ] && [ "$win_computer" != "$WINDOWS_HOST" ]; then
+		add_host "$win_ip" "$win_computer"
+	fi
 	write_krb5_conf 127.0.0.1:$KDC_PORT
 	cp /etc/hosts "$LOGDIR/hosts"
 	cp /etc/krb5.conf "$LOGDIR/krb5.conf"
