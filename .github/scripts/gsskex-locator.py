@@ -263,8 +263,10 @@ def read_exact(sock, length):
     return bytes(data)
 
 
+target_host = sys.argv[1]
+target_port = int(sys.argv[2])
 request = sys.stdin.buffer.read()
-with socket.create_connection(("127.0.0.1", 88), timeout=5) as kdc:
+with socket.create_connection((target_host, target_port), timeout=5) as kdc:
     kdc.settimeout(10)
     kdc.sendall(request)
     header = read_exact(kdc, 4)
@@ -274,9 +276,16 @@ sys.stdout.buffer.write(header + response)
 """
 
 
-def relay_tcp_frame_via_wsl(frame):
+def relay_tcp_frame_via_wsl(frame, distribution, target_host, target_port):
     result = subprocess.run(
-        ["wsl.exe", "-u", "root", "--", "python3", "-c", WSL_KDC_RELAY],
+        [
+            "wsl.exe",
+            "--distribution", distribution,
+            "--user", "root",
+            "--",
+            "python3", "-c", WSL_KDC_RELAY,
+            target_host, str(target_port),
+        ],
         input=frame,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -284,8 +293,9 @@ def relay_tcp_frame_via_wsl(frame):
         check=False)
     if result.returncode != 0:
         logging.info(
-            "KDC TCP WSL relay failed rc=%s stderr=%r",
-            result.returncode, result.stderr.decode("utf-8", "replace"))
+            "KDC TCP WSL relay to %s:%s failed rc=%s stderr=%r",
+            target_host, target_port, result.returncode,
+            result.stderr.decode("utf-8", "replace"))
         return None
     return result.stdout
 
@@ -313,7 +323,9 @@ class KdcTcpProxyHandler(socketserver.BaseRequestHandler):
                 logging.info("KDC TCP proxy request %s bytes", length)
 
                 if server.use_wsl_tcp:
-                    response_frame = relay_tcp_frame_via_wsl(frame)
+                    response_frame = relay_tcp_frame_via_wsl(
+                        frame, server.wsl_distribution,
+                        server.target_host, server.target_port)
                     if response_frame is None:
                         return
                     self.request.sendall(response_frame)
@@ -349,6 +361,7 @@ def main():
     parser.add_argument("--kdc-udp-target")
     parser.add_argument("--kdc-udp-port", type=int, default=88)
     parser.add_argument("--kdc-tcp-via-wsl", action="store_true")
+    parser.add_argument("--wsl-distribution", default="Debian-12")
     parser.add_argument("--log", required=True)
     args = parser.parse_args()
 
@@ -390,6 +403,7 @@ def main():
         kdc_tcp.target_host = args.kdc_udp_target
         kdc_tcp.target_port = args.kdc_udp_port
         kdc_tcp.use_wsl_tcp = args.kdc_tcp_via_wsl
+        kdc_tcp.wsl_distribution = args.wsl_distribution
         servers.append(kdc_udp)
         servers.append(kdc_tcp)
 

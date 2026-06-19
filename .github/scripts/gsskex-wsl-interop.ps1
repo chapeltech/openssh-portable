@@ -72,6 +72,7 @@ function Start-TestLocator([string]$WslIp) {
         '--kdc-udp-target', $WslIp,
         '--kdc-udp-port', '88',
         '--kdc-tcp-via-wsl',
+        '--wsl-distribution', 'Debian-12',
         '--log', $locatorLog
     )
 
