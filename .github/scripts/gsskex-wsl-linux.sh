@@ -186,6 +186,7 @@ GSSAPIAuthentication yes
 GSSAPIKeyExchange yes
 GSSAPIKexAlgorithms gss-curve25519-sha256-
 GSSAPIStrictAcceptorCheck no
+HostKey none
 PubkeyAuthentication no
 PasswordAuthentication no
 KbdInteractiveAuthentication no
@@ -212,6 +213,11 @@ assert_gss_kex()
 		echo "$name did not use gss-curve25519-sha256-" >&2
 		exit 1
 	fi
+	if ! grep -q 'kex: host key algorithm: null' "$log"; then
+		cat "$log" >&2
+		echo "$name did not use keyless GSS KEX" >&2
+		exit 1
+	fi
 }
 
 linux_to_windows()
@@ -232,6 +238,7 @@ linux_to_windows()
 		-o StrictHostKeyChecking=yes \
 		-o UserKnownHostsFile="$known" \
 		-o GlobalKnownHostsFile="$global_known" \
+		-o IdentityFile=none \
 		-o GSSAPIAuthentication=yes \
 		-o GSSAPIKeyExchange=yes \
 		-o GSSAPIKexAlgorithms=gss-curve25519-sha256- \

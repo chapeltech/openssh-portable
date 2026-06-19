@@ -212,6 +212,9 @@ function Assert-GssKex([string]$Name, [string]$Log) {
     if ($text -notmatch 'kex: algorithm: gss-curve25519-sha256-') {
         throw "$Name did not use gss-curve25519-sha256-"
     }
+    if ($text -notmatch 'kex: host key algorithm: null') {
+        throw "$Name did not use keyless GSS KEX"
+    }
 }
 
 function Stop-TestSshd() {
@@ -235,6 +238,7 @@ Port $windowsPort
 ListenAddress 0.0.0.0
 PidFile $testRoot/windows-sshd.pid
 LogLevel DEBUG3
+HostKey none
 GSSAPIAuthentication yes
 GSSAPIKeyExchange yes
 GSSAPIKexAlgorithms gss-curve25519-sha256-
@@ -390,6 +394,7 @@ try {
         '-o', 'StrictHostKeyChecking=yes',
         '-o', "UserKnownHostsFile=$knownHosts",
         '-o', "GlobalKnownHostsFile=$globalKnownHosts",
+        '-o', 'IdentityFile=none',
         '-o', 'GSSAPIAuthentication=yes',
         '-o', 'GSSAPIKeyExchange=yes',
         '-o', 'GSSAPIKexAlgorithms=gss-curve25519-sha256-',
