@@ -82,6 +82,8 @@ init_heimdal()
 	add_host "$wsl_ip" "$LINUX_HOST"
 	add_host "$win_ip" "$WINDOWS_HOST"
 	write_krb5_conf 127.0.0.1
+	cp /etc/hosts "$LOGDIR/hosts"
+	cp /etc/krb5.conf "$LOGDIR/krb5.conf"
 	cat > /etc/heimdal-kdc/kdc.conf <<EOF
 [logging]
 	kdc = FILE:$LOGDIR/heimdal-kdc.log
@@ -116,14 +118,17 @@ EOF
 	echo $! > "$WORK/kdc.pid"
 	echo "Waiting for Debian Heimdal KDC readiness"
 	for _ in 1 2 3 4 5 6 7 8 9 10; do
+		kinit_log=$LOGDIR/kinit-ready-$_.log
 		if printf '%s\n' "$USER_PASSWORD" |
-		    timeout 5s kinit "$USER_NAME@$REALM" >/dev/null 2>&1; then
+		    timeout 5s kinit "$USER_NAME@$REALM" \
+		    >"$kinit_log" 2>&1; then
 			kdestroy >/dev/null 2>&1 || true
 			return
 		fi
 		sleep 1
 	done
 	cat "$LOGDIR"/kdc.*.log "$LOGDIR"/heimdal-*.log 2>/dev/null || true
+	cat "$LOGDIR"/kinit-ready-*.log 2>/dev/null || true
 	echo "Heimdal KDC did not become ready" >&2
 	exit 1
 }
