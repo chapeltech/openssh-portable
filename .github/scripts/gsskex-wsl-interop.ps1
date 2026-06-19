@@ -230,6 +230,7 @@ try {
     $linuxScript = Convert-ToWslPath (Join-Path $repo '.github\scripts\gsskex-wsl-linux.sh')
     $repoWsl = Convert-ToWslPath $repo
     $computerLower = $env:COMPUTERNAME.ToLowerInvariant()
+    Write-Output 'Running Debian Heimdal/OpenSSH setup in WSL'
     & wsl.exe -u root -- env `
         "USER_PASSWORD=$userPassword" `
         "COMPUTER_PASSWORD=$computerPassword" `
@@ -238,6 +239,7 @@ try {
         throw "Linux setup failed with $LASTEXITCODE"
     }
 
+    Write-Output 'Compiling run_netonly helper'
     $script:runNetonly = Compile-RunNetonly
 
     $emptyConfig = Join-Path $testRoot 'empty_config'
@@ -273,6 +275,7 @@ try {
         "$userName@$linuxHost",
         '/bin/echo', 'windows-to-linux-gsskex-ok'
     )
+    Write-Output 'Running Windows client to Debian sshd GSS KEX test'
     Invoke-NetonlyCommand -Name 'windows-to-linux' `
         -CommandArgs $winToLinux -Log $winToLinuxLog
     Assert-GssKex 'windows-to-linux' $winToLinuxLog
@@ -294,8 +297,10 @@ try {
     $authorizedKeys = Join-Path $testRoot 'windows_authorized_keys'
     & wsl.exe -u root -- cat "$linuxWork/linux-to-windows-ed25519.pub" |
         Set-Content -Path $authorizedKeys -Encoding ASCII
+    Write-Output 'Starting Windows sshd test peer'
     Start-WindowsSshd -AuthorizedKeys $authorizedKeys
 
+    Write-Output 'Running Debian client to Windows sshd GSS KEX test'
     & wsl.exe -u root -- env "USER_PASSWORD=$userPassword" `
         bash $linuxScript linux-to-windows
     if ($LASTEXITCODE -ne 0) {

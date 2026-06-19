@@ -62,6 +62,7 @@ init_heimdal()
 	win_ip=$2
 	win_computer=$3
 
+	echo "Setting up Debian Heimdal KDC"
 	mkdir -p "$WORK" "$LOGDIR" /etc/heimdal-kdc /var/lib/heimdal-kdc
 	add_host "$wsl_ip" "$KDC_HOST $LINUX_HOST"
 	add_host "$win_ip" "$WINDOWS_HOST"
@@ -115,17 +116,25 @@ build_linux_openssh()
 {
 	repo=$1
 
+	echo "Copying source tree into WSL"
 	rm -rf "$SRC"
 	mkdir -p "$SRC"
 	rsync -a --delete \
 		--exclude .git \
 		--exclude autom4te.cache \
+		--exclude /bin \
+		--exclude /contrib/win32/openssh/lib \
+		--exclude /contrib/win32/openssh/vcpkg_installed \
+		--exclude /contrib/win32/openssh/x64 \
 		--exclude gsskex-interop-logs \
 		"$repo"/ "$SRC"/
 	cd "$SRC"
+	echo "Running autoreconf for Debian OpenSSH build"
 	autoreconf
+	echo "Configuring Debian OpenSSH build with Heimdal"
 	./configure --with-kerberos5=/usr --with-libedit \
 		>"$LOGDIR/configure-linux.log" 2>&1
+	echo "Building Debian OpenSSH"
 	make -j"$(nproc)" \
 		>"$LOGDIR/make-linux.log" 2>&1
 	./ssh -V 2>"$LOGDIR/linux-ssh-version.log" || true
@@ -133,6 +142,7 @@ build_linux_openssh()
 
 start_linux_sshd()
 {
+	echo "Starting Debian sshd test peer"
 	mkdir -p "$WORK/linux-etc" "$WORK/empty"
 	mkdir -p /var/empty
 	chown root:root /var/empty
@@ -194,6 +204,7 @@ assert_gss_kex()
 
 linux_to_windows()
 {
+	echo "Running Debian client to Windows sshd GSS KEX test"
 	printf '%s\n' "$USER_PASSWORD" | kinit "$USER_NAME@$REALM" >/dev/null
 	known=$WORK/linux-known-hosts.empty
 	global_known=$WORK/linux-global-known-hosts.empty
