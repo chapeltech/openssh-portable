@@ -232,7 +232,9 @@ function Start-WindowsSshd([string]$AuthorizedKeys) {
     $hostKey = Join-Path $testRoot 'windows-ssh-host-ed25519'
     Remove-Item "$hostKey*" -Force -ErrorAction SilentlyContinue
     Invoke-Checked $sshKeygen @('-q', '-t', 'ed25519', '-N', '', '-f', $hostKey)
+    $runnerUser = "$env:USERDOMAIN\$env:USERNAME"
     Invoke-Checked icacls.exe @($hostKey, '/inheritance:r')
+    Invoke-Checked icacls.exe @($hostKey, '/remove:g', $runnerUser)
     Invoke-Checked icacls.exe @($hostKey, '/grant:r',
         '*S-1-5-18:F', '*S-1-5-32-544:F')
     Invoke-Checked icacls.exe @($hostKey, '/setowner', '*S-1-5-32-544')
