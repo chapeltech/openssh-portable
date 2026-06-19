@@ -28,7 +28,7 @@ jobs:
       - name: Set up WSL Debian
         uses: Vampire/setup-wsl@v7
         with:
-          distribution: Debian-13
+          distribution: Debian-12
           use-cache: false
           additional-packages: >-
             autoconf automake build-essential ca-certificates libedit-dev
