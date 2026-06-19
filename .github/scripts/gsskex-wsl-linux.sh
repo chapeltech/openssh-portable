@@ -250,7 +250,7 @@ linux_to_windows()
 		-o GSSAPIAuthentication=yes \
 		-o GSSAPIKeyExchange=yes \
 		-o GSSAPIKexAlgorithms=gss-curve25519-sha256- \
-		-o GSSAPIServerIdentity="$WINDOWS_HOST@$REALM" \
+		-o GSSAPIServerIdentity="$WINDOWS_HOST" \
 		-o PreferredAuthentications=gssapi-with-mic \
 		-o PubkeyAuthentication=no \
 		-o PasswordAuthentication=no \
