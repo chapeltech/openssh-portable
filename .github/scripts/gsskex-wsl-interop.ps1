@@ -194,6 +194,7 @@ try {
             throw "missing Windows build output: $path"
         }
     }
+    $winKlist = Join-Path $env:SystemRoot 'System32\klist.exe'
 
     Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled False
     New-Item 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\Kerberos\Parameters' `
@@ -251,6 +252,12 @@ try {
     Test-NetConnection -ComputerName $kdcHost -Port 88 |
         Format-List |
         Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
+    & $winKlist purge_bind $realm |
+        Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
+    & $winKlist add_bind $realm $kdcHost |
+        Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
+    & $winKlist query_bind |
+        Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
 
     Write-Output 'Compiling run_netonly helper'
     $script:runNetonly = Compile-RunNetonly
@@ -263,11 +270,10 @@ try {
     Set-Content -Path $globalKnownHosts -Value '' -NoNewline
 
     $winSsh = Join-Path $buildDir 'ssh.exe'
-    $winKlist = Join-Path $env:SystemRoot 'System32\klist.exe'
     $winKlistLog = Join-Path $logRoot 'windows-klist-linux.log'
     Write-Output 'Checking Windows Kerberos service ticket for Debian sshd'
     Invoke-NetonlyCommand -Name 'windows-klist-linux' `
-        -CommandArgs @($winKlist, 'get', "host/$linuxHost") `
+        -CommandArgs @($winKlist, 'get', "host/$linuxHost@$realm") `
         -Log $winKlistLog
 
     $winToLinuxLog = Join-Path $logRoot 'windows-to-linux-ssh.log'
@@ -283,7 +289,7 @@ try {
         '-o', 'GSSAPIAuthentication=yes',
         '-o', 'GSSAPIKeyExchange=yes',
         '-o', 'GSSAPIKexAlgorithms=gss-curve25519-sha256-',
-        '-o', "GSSAPIServerIdentity=$linuxHost",
+        '-o', "GSSAPIServerIdentity=$linuxHost@$realm",
         '-o', 'PreferredAuthentications=gssapi-with-mic',
         '-o', 'PubkeyAuthentication=no',
         '-o', 'PasswordAuthentication=no',
