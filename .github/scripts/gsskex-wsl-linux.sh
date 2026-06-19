@@ -116,8 +116,10 @@ EOF
 	fi
 	kadmin -l ext_keytab --keytab="$WORK/linux.keytab" "host/$LINUX_HOST"
 
-	/usr/lib/heimdal-servers/kdc --addresses=0.0.0.0 --ports=$KDC_PORT \
-		>"$LOGDIR/kdc.stdout.log" 2>"$LOGDIR/kdc.stderr.log" &
+	nohup /usr/lib/heimdal-servers/kdc \
+		--addresses=0.0.0.0 --ports=$KDC_PORT \
+		>"$LOGDIR/kdc.stdout.log" 2>"$LOGDIR/kdc.stderr.log" \
+		</dev/null &
 	echo $! > "$WORK/kdc.pid"
 	echo "Waiting for Debian Heimdal KDC readiness"
 	for _ in 1 2 3 4 5 6 7 8 9 10; do
