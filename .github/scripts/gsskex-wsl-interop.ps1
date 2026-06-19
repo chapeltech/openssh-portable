@@ -51,6 +51,59 @@ function Convert-ToWslPath([string]$Path) {
     throw "cannot convert path to WSL form: $Path"
 }
 
+function Remove-TestNrptRule() {
+    Get-DnsClientNrptRule -ErrorAction SilentlyContinue |
+        Where-Object { $_.Comment -eq 'OpenSSH GSS KEX test' } |
+        ForEach-Object {
+            Remove-DnsClientNrptRule -Name $_.Name -Force `
+                -ErrorAction SilentlyContinue
+        }
+}
+
+function Start-TestLocator() {
+    $locator = Join-Path $repo '.github\scripts\gsskex-locator.py'
+    $locatorLog = Join-Path $logRoot 'locator.log'
+    $locatorOut = Join-Path $logRoot 'locator.out.log'
+    $locatorErr = Join-Path $logRoot 'locator.err.log'
+    $python = Get-Command python.exe -ErrorAction SilentlyContinue
+    $locatorArgs = @($locator, '--realm', $realm, '--log', $locatorLog)
+
+    if (-not $python) {
+        $python = Get-Command py.exe -ErrorAction Stop
+        $locatorArgs = @('-3') + $locatorArgs
+    }
+
+    Remove-TestNrptRule
+    Add-DnsClientNrptRule `
+        -Namespace @($realm, ".$realm") `
+        -NameServers '127.0.0.1' `
+        -Comment 'OpenSSH GSS KEX test' |
+        Out-Null
+
+    $script:locatorProcess = Start-Process `
+        -FilePath $python.Source `
+        -ArgumentList $locatorArgs `
+        -PassThru `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $locatorOut `
+        -RedirectStandardError $locatorErr
+    Start-Sleep -Seconds 2
+    if ($script:locatorProcess.HasExited) {
+        if (Test-Path $locatorErr) {
+            Get-Content $locatorErr
+        }
+        throw 'Windows Kerberos locator helper exited early'
+    }
+}
+
+function Stop-TestLocator() {
+    if ($script:locatorProcess -and -not $script:locatorProcess.HasExited) {
+        Stop-Process -Id $script:locatorProcess.Id -Force `
+            -ErrorAction SilentlyContinue
+    }
+    Remove-TestNrptRule
+}
+
 function Compile-RunNetonly() {
     $source = Join-Path $repo '.github\scripts\run_netonly.c'
     $out = Join-Path $testRoot 'run_netonly.exe'
@@ -203,6 +256,10 @@ try {
         -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\Kerberos\Parameters' `
         -Name MaxPacketSize -Value 1 -PropertyType DWord -Force |
         Out-Null
+    New-ItemProperty `
+        -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Lsa\Kerberos\Parameters' `
+        -Name FarKdcTimeout -Value 0 -PropertyType DWord -Force |
+        Out-Null
 
     $wslIp = (& wsl.exe -u root -- sh -lc "hostname -I | cut -d ' ' -f 1").Trim()
     if (-not $wslIp) {
@@ -223,14 +280,6 @@ try {
         Format-List |
         Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
 
-    & ksetup /addkdc $realm $kdcHost | Out-Null
-    & ksetup /addhosttorealmmap $kdcHost $realm | Out-Null
-    & ksetup /addhosttorealmmap $linuxHost $realm | Out-Null
-    & ksetup /addhosttorealmmap $windowsHost $realm | Out-Null
-    & ksetup /mapuser $userPrincipal $userName | Out-Null
-    & ksetup /setrealm $realm | Out-Null
-    & ksetup /setcomputerpassword $computerPassword | Out-Null
-    & ksetup /dumpstate | Tee-Object -FilePath (Join-Path $logRoot 'ksetup.txt')
     ipconfig /flushdns | Out-Null
 
     $linuxScript = Convert-ToWslPath (Join-Path $repo '.github\scripts\gsskex-wsl-linux.sh')
@@ -249,14 +298,20 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Linux setup failed with $LASTEXITCODE"
     }
-    Test-NetConnection -ComputerName $kdcHost -Port 88 |
+
+    Start-TestLocator
+    Get-DnsClientNrptRule |
+        Where-Object { $_.Comment -eq 'OpenSSH GSS KEX test' } |
         Format-List |
         Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
-    & $winKlist purge_bind $realm |
+    Resolve-DnsName "_kerberos._tcp.dc._msdcs.$($realm.ToLowerInvariant())" `
+        -Type SRV |
+        Format-List |
         Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
-    & $winKlist add_bind $realm $kdcHost |
+    & nltest.exe "/dsgetdc:$realm" /force |
         Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
-    & $winKlist query_bind |
+    Test-NetConnection -ComputerName $kdcHost -Port 88 |
+        Format-List |
         Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
 
     Write-Output 'Compiling run_netonly helper'
@@ -337,6 +392,7 @@ try {
 
     Write-Output 'Windows/Linux forced GSSAPIKeyExchange tests passed with empty known_hosts'
 } finally {
+    Stop-TestLocator
     Collect-InteropLogs
     Stop-TestSshd
     if (Test-Path (Join-Path $repo '.github\scripts\gsskex-wsl-linux.sh')) {
