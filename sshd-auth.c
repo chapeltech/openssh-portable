@@ -854,6 +854,7 @@ do_ssh2_kex(struct ssh *ssh)
 	char *orig;
 	char *gss = NULL;
 	char *newstr = NULL;
+	int have_gss = 0;
 	orig = myproposal[PROPOSAL_KEX_ALGS];
 
 	/*
@@ -868,12 +869,18 @@ do_ssh2_kex(struct ssh *ssh)
 		gss = ssh_gssapi_server_mechanisms();
 	else
 		gss = NULL;
+	have_gss = gss != NULL;
 
-	if (gss && orig)
+	if (gss && orig) {
 		xasprintf(&newstr, "%s,%s", gss, orig);
-	else if (gss)
-		newstr = gss;
-	else if (orig)
+		free(gss);
+	} else if (gss) {
+		newstr = kex_names_cat(gss,
+		    "ext-info-s,kex-strict-s-v00@openssh.com");
+		free(gss);
+		if (newstr == NULL)
+			fatal_f("kex_names_cat");
+	} else if (orig)
 		newstr = orig;
 
 	/*
@@ -881,7 +888,8 @@ do_ssh2_kex(struct ssh *ssh)
 	 * key alg, but we can't tell people about it unless its the only
 	 * host key algorithm we support
 	 */
-	if (gss && (strlen(myproposal[PROPOSAL_SERVER_HOST_KEY_ALGS])) == 0)
+	if (have_gss &&
+	    (strlen(myproposal[PROPOSAL_SERVER_HOST_KEY_ALGS])) == 0)
 		myproposal[PROPOSAL_SERVER_HOST_KEY_ALGS] = "null";
 
 	if (newstr)
