@@ -172,6 +172,7 @@ start_linux_sshd()
 	if ! id "$USER_NAME" >/dev/null 2>&1; then
 		useradd -m -s /bin/sh "$USER_NAME"
 	fi
+	printf '%s:%s\n' "$USER_NAME" "$USER_PASSWORD" | chpasswd
 	printf '%s@%s\n' "$USER_NAME" "$REALM" > "/home/$USER_NAME/.k5login"
 	chown "$USER_NAME:$USER_NAME" "/home/$USER_NAME/.k5login"
 	chmod 600 "/home/$USER_NAME/.k5login"
