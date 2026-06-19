@@ -370,6 +370,8 @@ def main():
     parser.add_argument("--listen", default="127.0.0.1")
     parser.add_argument("--kdc-udp-target")
     parser.add_argument("--kdc-udp-port", type=int, default=88)
+    parser.add_argument("--kdc-tcp-target")
+    parser.add_argument("--kdc-tcp-port", type=int)
     parser.add_argument("--kdc-tcp-via-wsl", action="store_true")
     parser.add_argument("--wsl-distribution", default="Debian-12")
     parser.add_argument("--log", required=True)
@@ -413,8 +415,8 @@ def main():
         kdc_udp.target_host = args.kdc_udp_target
         kdc_udp.target_port = args.kdc_udp_port
         kdc_tcp = ThreadedTcpServer((listen, 88), KdcTcpProxyHandler)
-        kdc_tcp.target_host = args.kdc_udp_target
-        kdc_tcp.target_port = args.kdc_udp_port
+        kdc_tcp.target_host = args.kdc_tcp_target or args.kdc_udp_target
+        kdc_tcp.target_port = args.kdc_tcp_port or args.kdc_udp_port
         kdc_tcp.use_wsl_tcp = args.kdc_tcp_via_wsl
         kdc_tcp.wsl_distribution = args.wsl_distribution
         servers.append(kdc_udp)

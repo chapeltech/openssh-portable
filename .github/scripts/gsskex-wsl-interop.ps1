@@ -94,6 +94,8 @@ function Start-TestLocator([string]$WslIp) {
         '--realm', $realm,
         '--kdc-udp-target', $WslIp,
         '--kdc-udp-port', '88',
+        '--kdc-tcp-target', '127.0.0.1',
+        '--kdc-tcp-port', '88',
         '--kdc-tcp-via-wsl',
         '--wsl-distribution', 'Debian-12',
         '--log', $locatorLog
@@ -346,6 +348,11 @@ try {
         bash $linuxScript setup $sourceTarWsl $wslIp $windowsIp $computerLower
     if ($LASTEXITCODE -ne 0) {
         throw "Linux setup failed with $LASTEXITCODE"
+    }
+    & wsl.exe --distribution Debian-12 --user root -- python3 -c `
+        "import socket; socket.create_connection(('127.0.0.1', 88), 5).close(); print('wsl-kdc-tcp-ok')"
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Debian Heimdal KDC is not reachable on WSL loopback'
     }
 
     Start-TestLocator $wslIp
