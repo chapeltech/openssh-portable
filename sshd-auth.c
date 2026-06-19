@@ -889,8 +889,10 @@ do_ssh2_kex(struct ssh *ssh)
 	 * host key algorithm we support
 	 */
 	if (have_gss &&
-	    (strlen(myproposal[PROPOSAL_SERVER_HOST_KEY_ALGS])) == 0)
-		myproposal[PROPOSAL_SERVER_HOST_KEY_ALGS] = "null";
+	    (strlen(myproposal[PROPOSAL_SERVER_HOST_KEY_ALGS])) == 0) {
+		free(myproposal[PROPOSAL_SERVER_HOST_KEY_ALGS]);
+		myproposal[PROPOSAL_SERVER_HOST_KEY_ALGS] = xstrdup("null");
+	}
 
 	if (newstr)
 		myproposal[PROPOSAL_KEX_ALGS] = newstr;
