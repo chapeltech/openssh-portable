@@ -726,7 +726,8 @@ main(int ac, char **av)
 			break;
 		}
 	}
-	if (!have_key)
+	/* The GSSAPI key exchange can run without a host key. */
+	if (!have_key && !options.gss_keyex)
 		fatal("internal error: received no hostkeys");
 
 	/* Ensure that umask disallows at least group and world write */
