@@ -60,6 +60,29 @@ function Remove-TestNrptRule() {
         }
 }
 
+function Wait-TestTcpPort([int]$Port) {
+    $deadline = (Get-Date).AddSeconds(20)
+    do {
+        $client = [System.Net.Sockets.TcpClient]::new()
+        try {
+            $async = $client.BeginConnect('127.0.0.1', $Port, $null, $null)
+            if ($async.AsyncWaitHandle.WaitOne(500)) {
+                $client.EndConnect($async)
+                return
+            }
+        } catch {
+        } finally {
+            $client.Close()
+        }
+        if ($script:locatorProcess -and $script:locatorProcess.HasExited) {
+            throw "Windows Kerberos locator helper exited while waiting for TCP port $Port"
+        }
+        Start-Sleep -Milliseconds 250
+    } while ((Get-Date) -lt $deadline)
+
+    throw "Windows Kerberos locator helper did not open TCP port $Port"
+}
+
 function Start-TestLocator([string]$WslIp) {
     $locator = Join-Path $repo '.github\scripts\gsskex-locator.py'
     $locatorLog = Join-Path $logRoot 'locator.log'
@@ -102,6 +125,12 @@ function Start-TestLocator([string]$WslIp) {
         }
         throw 'Windows Kerberos locator helper exited early'
     }
+    "Locator PID: $($script:locatorProcess.Id)" |
+        Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
+    "Locator command: $($python.Source) $(Join-CmdLine $locatorArgs)" |
+        Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
+    Wait-TestTcpPort 53
+    Wait-TestTcpPort 88
     Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 53 `
         -ErrorAction SilentlyContinue |
         Format-List |

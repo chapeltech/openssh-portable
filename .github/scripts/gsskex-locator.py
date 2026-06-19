@@ -101,15 +101,23 @@ class DnsUdpHandler(socketserver.BaseRequestHandler):
 
 class DnsTcpHandler(socketserver.StreamRequestHandler):
     def handle(self):
-        length_raw = self.rfile.read(2)
-        if len(length_raw) != 2:
-            return
-        length = struct.unpack("!H", length_raw)[0]
-        data = self.rfile.read(length)
-        if len(data) != length:
-            return
-        response = dns_response(data, self.server)
-        self.wfile.write(struct.pack("!H", len(response)) + response)
+        while True:
+            length_raw = self.rfile.read(2)
+            if len(length_raw) == 0:
+                return
+            if len(length_raw) != 2:
+                logging.info("short TCP DNS length from %s", self.client_address)
+                return
+            length = struct.unpack("!H", length_raw)[0]
+            data = self.rfile.read(length)
+            if len(data) != length:
+                logging.info(
+                    "short TCP DNS request from %s: got %s wanted %s",
+                    self.client_address, len(data), length)
+                return
+            response = dns_response(data, self.server)
+            self.wfile.write(struct.pack("!H", len(response)) + response)
+            self.wfile.flush()
 
 
 def ber_len(length):
@@ -348,10 +356,12 @@ class KdcTcpProxyHandler(socketserver.BaseRequestHandler):
 
 class ThreadedUdpServer(socketserver.ThreadingMixIn, socketserver.UDPServer):
     allow_reuse_address = True
+    daemon_threads = True
 
 
 class ThreadedTcpServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
+    daemon_threads = True
 
 
 def main():
@@ -366,7 +376,10 @@ def main():
     args = parser.parse_args()
 
     logging.basicConfig(
-        filename=args.log,
+        handlers=[
+            logging.FileHandler(args.log, encoding="utf-8"),
+            logging.StreamHandler(),
+        ],
         level=logging.INFO,
         format="%(asctime)s %(message)s")
 
