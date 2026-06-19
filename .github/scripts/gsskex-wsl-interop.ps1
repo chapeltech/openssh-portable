@@ -217,8 +217,11 @@ try {
 
     Add-HostsLine "$wslIp $kdcHost $linuxHost"
     Add-HostsLine "127.0.0.1 $windowsHost"
+    Resolve-DnsName $kdcHost |
+        Format-List |
+        Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
 
-    & ksetup /addkdc $realm $kdcHost | Out-Null
+    & ksetup /addkdc $realm $wslIp | Out-Null
     & ksetup /addhosttorealmmap $kdcHost $realm | Out-Null
     & ksetup /addhosttorealmmap $linuxHost $realm | Out-Null
     & ksetup /addhosttorealmmap $windowsHost $realm | Out-Null
@@ -244,6 +247,9 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "Linux setup failed with $LASTEXITCODE"
     }
+    Test-NetConnection -ComputerName $wslIp -Port 88 |
+        Format-List |
+        Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
 
     Write-Output 'Compiling run_netonly helper'
     $script:runNetonly = Compile-RunNetonly
