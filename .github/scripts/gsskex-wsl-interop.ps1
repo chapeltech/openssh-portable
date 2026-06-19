@@ -42,11 +42,13 @@ function Add-HostsLine([string]$Line) {
 }
 
 function Convert-ToWslPath([string]$Path) {
-    $converted = (& wsl.exe -u root -- wslpath -a $Path).Trim()
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($converted)) {
-        throw "wslpath failed for $Path"
+    $full = (Resolve-Path $Path).Path
+    if ($full -match '^([A-Za-z]):\\(.*)$') {
+        $drive = $Matches[1].ToLowerInvariant()
+        $rest = $Matches[2] -replace '\\', '/'
+        return "/mnt/$drive/$rest"
     }
-    $converted
+    throw "cannot convert path to WSL form: $Path"
 }
 
 function Compile-RunNetonly() {
@@ -200,11 +202,11 @@ try {
         -Name MaxPacketSize -Value 1 -PropertyType DWord -Force |
         Out-Null
 
-    $wslIp = (& wsl.exe -u root -- sh -lc "hostname -I | awk '{print `$1; exit}'").Trim()
+    $wslIp = (& wsl.exe -u root -- sh -lc "hostname -I | cut -d ' ' -f 1").Trim()
     if (-not $wslIp) {
         throw 'could not determine WSL IP address'
     }
-    $windowsIp = (& wsl.exe -u root -- sh -lc "awk '/nameserver/ {print `$2; exit}' /etc/resolv.conf").Trim()
+    $windowsIp = (& wsl.exe -u root -- sh -lc "sed -n 's/^nameserver[[:space:]][[:space:]]*//p' /etc/resolv.conf | head -n 1").Trim()
     if (-not $windowsIp) {
         throw 'could not determine Windows host IP from WSL'
     }
