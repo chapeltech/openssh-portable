@@ -95,6 +95,10 @@ function Start-TestLocator() {
         }
         throw 'Windows Kerberos locator helper exited early'
     }
+    Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 53 `
+        -ErrorAction SilentlyContinue |
+        Format-List |
+        Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
 }
 
 function Stop-TestLocator() {
@@ -118,6 +122,10 @@ function Start-KdcPortProxy() {
         connectaddress=127.0.0.1 connectport=$kdcPort |
         Out-Null
     & netsh.exe interface portproxy show all |
+        Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
+    Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort 88 `
+        -ErrorAction SilentlyContinue |
+        Format-List |
         Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
 }
 
@@ -316,7 +324,6 @@ try {
         throw "Linux setup failed with $LASTEXITCODE"
     }
 
-    Start-KdcPortProxy
     Start-TestLocator
     Get-DnsClientNrptRule |
         Where-Object { $_.Comment -eq 'OpenSSH GSS KEX test' } |
@@ -328,6 +335,7 @@ try {
         Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
     & nltest.exe "/dsgetdc:$realm" /force |
         Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
+    Start-KdcPortProxy
     Test-NetConnection -ComputerName 127.0.0.1 -Port $kdcPort |
         Format-List |
         Out-File -FilePath (Join-Path $logRoot 'network.txt') -Append
