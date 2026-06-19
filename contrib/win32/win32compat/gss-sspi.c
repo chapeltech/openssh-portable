@@ -1163,7 +1163,7 @@ gss_accept_sec_context(_Out_ OM_uint32 * minor_status, _Inout_opt_ gss_ctx_id_t 
 	SecFunctions->FreeContextBuffer(output_buffer_token.pvBuffer);
 
 	/* get the user token for impersonation */
-	if (delegated_cred_handle != NULL) {
+	if (status == SEC_E_OK && delegated_cred_handle != NULL) {
 		if ((*delegated_cred_handle = malloc(sizeof(struct cred_st))) == NULL)
 			goto done;
 		if (SecFunctions->QuerySecurityContextToken(*context_handle, &sspi_auth_user) != SEC_E_OK)
