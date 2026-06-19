@@ -228,13 +228,18 @@ try {
     ipconfig /flushdns | Out-Null
 
     $linuxScript = Convert-ToWslPath (Join-Path $repo '.github\scripts\gsskex-wsl-linux.sh')
-    $repoWsl = Convert-ToWslPath $repo
+    $sourceTar = Join-Path $testRoot 'source.tar'
+    Remove-Item $sourceTar -Force -ErrorAction SilentlyContinue
+    Write-Output 'Creating tracked source archive for Debian build'
+    Invoke-Checked git.exe @('-C', $repo, 'archive', '--format=tar',
+        "--output=$sourceTar", 'HEAD')
+    $sourceTarWsl = Convert-ToWslPath $sourceTar
     $computerLower = $env:COMPUTERNAME.ToLowerInvariant()
     Write-Output 'Running Debian Heimdal/OpenSSH setup in WSL'
     & wsl.exe -u root -- env `
         "USER_PASSWORD=$userPassword" `
         "COMPUTER_PASSWORD=$computerPassword" `
-        bash $linuxScript setup $repoWsl $wslIp $windowsIp $computerLower
+        bash $linuxScript setup $sourceTarWsl $wslIp $windowsIp $computerLower
     if ($LASTEXITCODE -ne 0) {
         throw "Linux setup failed with $LASTEXITCODE"
     }

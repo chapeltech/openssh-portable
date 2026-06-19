@@ -32,7 +32,7 @@ jobs:
           use-cache: false
           additional-packages: >-
             autoconf automake build-essential ca-certificates libedit-dev
-            libssl-dev pkg-config rsync zlib1g-dev heimdal-clients
+            libssl-dev pkg-config zlib1g-dev heimdal-clients
             heimdal-dev heimdal-kdc
 
       - name: Prepare vcpkg

@@ -114,20 +114,12 @@ EOF
 
 build_linux_openssh()
 {
-	repo=$1
+	source_tar=$1
 
-	echo "Copying source tree into WSL"
+	echo "Extracting tracked source archive into WSL"
 	rm -rf "$SRC"
 	mkdir -p "$SRC"
-	rsync -a --delete \
-		--exclude .git \
-		--exclude autom4te.cache \
-		--exclude /bin \
-		--exclude /contrib/win32/openssh/lib \
-		--exclude /contrib/win32/openssh/vcpkg_installed \
-		--exclude /contrib/win32/openssh/x64 \
-		--exclude gsskex-interop-logs \
-		"$repo"/ "$SRC"/
+	tar -xf "$source_tar" -C "$SRC"
 	cd "$SRC"
 	echo "Running autoreconf for Debian OpenSSH build"
 	autoreconf
@@ -245,7 +237,7 @@ linux_to_windows()
 case "$ACTION" in
 	setup)
 		if [ $# -ne 5 ]; then
-			echo "usage: $0 setup REPO WSL_IP WIN_IP WIN_COMPUTER" >&2
+			echo "usage: $0 setup SOURCE_TAR WSL_IP WIN_IP WIN_COMPUTER" >&2
 			exit 2
 		fi
 		init_heimdal "$3" "$4" "$5"
