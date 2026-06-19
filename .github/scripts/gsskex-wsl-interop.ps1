@@ -71,6 +71,7 @@ function Start-TestLocator([string]$WslIp) {
         '--realm', $realm,
         '--kdc-udp-target', $WslIp,
         '--kdc-udp-port', '88',
+        '--kdc-tcp-via-wsl',
         '--log', $locatorLog
     )
 

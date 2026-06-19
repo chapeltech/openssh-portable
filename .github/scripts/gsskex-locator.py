@@ -10,6 +10,7 @@ import logging
 import socket
 import socketserver
 import struct
+import subprocess
 import threading
 import uuid
 
@@ -246,14 +247,60 @@ def read_exact(sock, length):
     return bytes(data)
 
 
+WSL_KDC_RELAY = r"""
+import socket
+import struct
+import sys
+
+
+def read_exact(sock, length):
+    data = bytearray()
+    while len(data) < length:
+        chunk = sock.recv(length - len(data))
+        if not chunk:
+            raise SystemExit(2)
+        data.extend(chunk)
+    return bytes(data)
+
+
+request = sys.stdin.buffer.read()
+with socket.create_connection(("127.0.0.1", 88), timeout=5) as kdc:
+    kdc.settimeout(10)
+    kdc.sendall(request)
+    header = read_exact(kdc, 4)
+    length = struct.unpack("!I", header)[0]
+    response = read_exact(kdc, length)
+sys.stdout.buffer.write(header + response)
+"""
+
+
+def relay_tcp_frame_via_wsl(frame):
+    result = subprocess.run(
+        ["wsl.exe", "-u", "root", "--", "python3", "-c", WSL_KDC_RELAY],
+        input=frame,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=20,
+        check=False)
+    if result.returncode != 0:
+        logging.info(
+            "KDC TCP WSL relay failed rc=%s stderr=%r",
+            result.returncode, result.stderr.decode("utf-8", "replace"))
+        return None
+    return result.stdout
+
+
 class KdcTcpProxyHandler(socketserver.BaseRequestHandler):
     def handle(self):
         server = self.server
         logging.info("KDC TCP proxy connection from %s", self.client_address)
-        with socket.create_connection(
-            (server.target_host, server.target_port), timeout=5) as upstream:
-            self.request.settimeout(10)
+        self.request.settimeout(10)
+        upstream = None
+        if not server.use_wsl_tcp:
+            upstream = socket.create_connection(
+                (server.target_host, server.target_port), timeout=5)
             upstream.settimeout(10)
+        try:
             while True:
                 header = read_exact(self.request, 4)
                 if header is None:
@@ -262,9 +309,17 @@ class KdcTcpProxyHandler(socketserver.BaseRequestHandler):
                 data = read_exact(self.request, length)
                 if data is None:
                     return
+                frame = header + data
                 logging.info("KDC TCP proxy request %s bytes", length)
-                upstream.sendall(header + data)
 
+                if server.use_wsl_tcp:
+                    response_frame = relay_tcp_frame_via_wsl(frame)
+                    if response_frame is None:
+                        return
+                    self.request.sendall(response_frame)
+                    continue
+
+                upstream.sendall(frame)
                 response_header = read_exact(upstream, 4)
                 if response_header is None:
                     return
@@ -274,6 +329,9 @@ class KdcTcpProxyHandler(socketserver.BaseRequestHandler):
                     return
                 logging.info("KDC TCP proxy response %s bytes", response_length)
                 self.request.sendall(response_header + response)
+        finally:
+            if upstream is not None:
+                upstream.close()
 
 
 class ThreadedUdpServer(socketserver.ThreadingMixIn, socketserver.UDPServer):
@@ -290,6 +348,7 @@ def main():
     parser.add_argument("--listen", default="127.0.0.1")
     parser.add_argument("--kdc-udp-target")
     parser.add_argument("--kdc-udp-port", type=int, default=88)
+    parser.add_argument("--kdc-tcp-via-wsl", action="store_true")
     parser.add_argument("--log", required=True)
     args = parser.parse_args()
 
@@ -330,6 +389,7 @@ def main():
         kdc_tcp = ThreadedTcpServer((listen, 88), KdcTcpProxyHandler)
         kdc_tcp.target_host = args.kdc_udp_target
         kdc_tcp.target_port = args.kdc_udp_port
+        kdc_tcp.use_wsl_tcp = args.kdc_tcp_via_wsl
         servers.append(kdc_udp)
         servers.append(kdc_tcp)
 
