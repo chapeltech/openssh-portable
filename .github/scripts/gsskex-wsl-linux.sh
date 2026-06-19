@@ -78,6 +78,8 @@ init_heimdal()
 
 	echo "Setting up Debian Heimdal KDC"
 	mkdir -p "$WORK" "$LOGDIR" /etc/heimdal-kdc /var/lib/heimdal-kdc
+	printf '%s\n' "$USER_PASSWORD" > "$WORK/user.password"
+	chmod 600 "$WORK/user.password"
 	add_host 127.0.0.1 "$KDC_HOST"
 	add_host "$wsl_ip" "$LINUX_HOST"
 	add_host "$win_ip" "$WINDOWS_HOST"
@@ -119,9 +121,8 @@ EOF
 	echo "Waiting for Debian Heimdal KDC readiness"
 	for _ in 1 2 3 4 5 6 7 8 9 10; do
 		kinit_log=$LOGDIR/kinit-ready-$_.log
-		if printf '%s\n' "$USER_PASSWORD" |
-		    timeout 5s kinit "$USER_NAME@$REALM" \
-		    >"$kinit_log" 2>&1; then
+		if timeout 5s kinit --password-file="$WORK/user.password" \
+		    "$USER_NAME@$REALM" >"$kinit_log" 2>&1; then
 			kdestroy >/dev/null 2>&1 || true
 			return
 		fi
@@ -217,7 +218,8 @@ assert_gss_kex()
 linux_to_windows()
 {
 	echo "Running Debian client to Windows sshd GSS KEX test"
-	printf '%s\n' "$USER_PASSWORD" | kinit "$USER_NAME@$REALM" >/dev/null
+	kinit --password-file="$WORK/user.password" "$USER_NAME@$REALM" \
+		>/dev/null
 	known=$WORK/linux-known-hosts.empty
 	global_known=$WORK/linux-global-known-hosts.empty
 	empty_config=$WORK/linux-empty-config
