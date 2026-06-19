@@ -84,8 +84,8 @@ function Invoke-NetonlyCommand(
         'exit /b %ERRORLEVEL%'
     )
 
-    $env:RUN_NETONLY_USER = $userName
-    $env:RUN_NETONLY_DOMAIN = $realm
+    $env:RUN_NETONLY_USER = $userPrincipal
+    Remove-Item Env:RUN_NETONLY_DOMAIN -ErrorAction SilentlyContinue
     $env:RUN_NETONLY_PASSWORD = $userPassword
     $env:RUN_NETONLY_CWD = $testRoot
     & $script:runNetonly --cmdline ('cmd.exe /c ' + (Quote-CmdArg $cmdFile))
