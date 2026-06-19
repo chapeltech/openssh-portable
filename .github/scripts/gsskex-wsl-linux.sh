@@ -9,6 +9,7 @@ COMPUTER_PASSWORD=${COMPUTER_PASSWORD:-GssproxyHost!2026}
 KDC_HOST=kdc1.example.com
 LINUX_HOST=linux.example.com
 WINDOWS_HOST=${WINDOWS_HOST:-win.example.com}
+WINDOWS_CONNECT_HOST=${WINDOWS_CONNECT_HOST:-$WINDOWS_HOST}
 KDC_PORT=88
 WORK=/tmp/openssh-gsskex-interop
 LOGDIR=$WORK/logs
@@ -58,6 +59,8 @@ write_krb5_conf()
 	udp_preference_limit = 1
 	forwardable = true
 	default_cc_name = FILE:/tmp/krb5cc_%{uid}
+	dns_canonicalize_hostname = false
+	rdns = false
 
 [realms]
 	$REALM = {
@@ -238,6 +241,8 @@ linux_to_windows()
 	if ! timeout 2m "$SRC/ssh" -vvv \
 		-F "$empty_config" \
 		-o BatchMode=yes \
+		-o HostName="$WINDOWS_CONNECT_HOST" \
+		-o AddressFamily=inet \
 		-o StrictHostKeyChecking=yes \
 		-o UserKnownHostsFile="$known" \
 		-o GlobalKnownHostsFile="$global_known" \
@@ -245,7 +250,7 @@ linux_to_windows()
 		-o GSSAPIAuthentication=yes \
 		-o GSSAPIKeyExchange=yes \
 		-o GSSAPIKexAlgorithms=gss-curve25519-sha256- \
-		-o GSSAPIServerIdentity="$WINDOWS_HOST" \
+		-o GSSAPIServerIdentity="$WINDOWS_HOST@$REALM" \
 		-o PreferredAuthentications=gssapi-with-mic \
 		-o PubkeyAuthentication=no \
 		-o PasswordAuthentication=no \

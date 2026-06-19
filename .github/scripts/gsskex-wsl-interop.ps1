@@ -515,6 +515,7 @@ try {
         -Arguments @(
             '-u', 'root', '--', 'env', "USER_PASSWORD=$userPassword",
             "WINDOWS_HOST=$computerLower",
+            "WINDOWS_CONNECT_HOST=$windowsIp",
             'bash', $linuxScript, 'linux-to-windows'
         )
 
