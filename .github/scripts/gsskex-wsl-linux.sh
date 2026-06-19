@@ -177,13 +177,10 @@ start_linux_sshd()
 	chown "$USER_NAME:$USER_NAME" "/home/$USER_NAME/.k5login"
 	chmod 600 "/home/$USER_NAME/.k5login"
 
-	"$SRC/ssh-keygen" -q -t ed25519 -N '' \
-		-f "$WORK/linux-ssh-host-ed25519" >/dev/null
 	cat > "$WORK/linux-sshd_config" <<EOF
 Port $LINUX_PORT
 ListenAddress 0.0.0.0
 PidFile $WORK/linux-sshd.pid
-HostKey $WORK/linux-ssh-host-ed25519
 LogLevel DEBUG3
 GSSAPIAuthentication yes
 GSSAPIKeyExchange yes
@@ -204,13 +201,6 @@ EOF
 		cat "$LOGDIR/linux-sshd.log" >&2 || true
 		exit 1
 	fi
-}
-
-create_linux_to_windows_key()
-{
-	rm -f "$WORK/linux-to-windows-ed25519" "$WORK/linux-to-windows-ed25519.pub"
-	"$SRC/ssh-keygen" -q -t ed25519 -N '' \
-		-f "$WORK/linux-to-windows-ed25519" >/dev/null
 }
 
 assert_gss_kex()
@@ -246,10 +236,8 @@ linux_to_windows()
 		-o GSSAPIKeyExchange=yes \
 		-o GSSAPIKexAlgorithms=gss-curve25519-sha256- \
 		-o GSSAPIServerIdentity="$WINDOWS_HOST" \
-		-o PreferredAuthentications=publickey \
-		-o PubkeyAuthentication=yes \
-		-o IdentityFile="$WORK/linux-to-windows-ed25519" \
-		-o IdentitiesOnly=yes \
+		-o PreferredAuthentications=gssapi-with-mic \
+		-o PubkeyAuthentication=no \
 		-o PasswordAuthentication=no \
 		-o KbdInteractiveAuthentication=no \
 		-o NumberOfPasswordPrompts=0 \
@@ -277,7 +265,6 @@ case "$ACTION" in
 		init_heimdal "$3" "$4" "$5"
 		build_linux_openssh "$2"
 		start_linux_sshd
-		create_linux_to_windows_key
 		;;
 	linux-to-windows)
 		linux_to_windows

@@ -219,25 +219,14 @@ function Stop-TestSshd() {
     Start-Sleep -Seconds 1
 }
 
-function Start-WindowsSshd([string]$AuthorizedKeys) {
+function Start-WindowsSshd() {
     $sshd = Join-Path $buildDir 'sshd.exe'
-    $sshKeygen = Join-Path $buildDir 'ssh-keygen.exe'
     $sftpServer = Join-Path $buildDir 'sftp-server.exe'
-    foreach ($path in @($sshd, $sshKeygen, $sftpServer)) {
+    foreach ($path in @($sshd, $sftpServer)) {
         if (-not (Test-Path $path)) {
             throw "missing required Windows binary: $path"
         }
     }
-
-    $hostKey = Join-Path $testRoot 'windows-ssh-host-ed25519'
-    Remove-Item "$hostKey*" -Force -ErrorAction SilentlyContinue
-    Invoke-Checked $sshKeygen @('-q', '-t', 'ed25519', '-N', '', '-f', $hostKey)
-    $runnerUser = "$env:USERDOMAIN\$env:USERNAME"
-    Invoke-Checked icacls.exe @($hostKey, '/inheritance:r')
-    Invoke-Checked icacls.exe @($hostKey, '/remove:g', $runnerUser)
-    Invoke-Checked icacls.exe @($hostKey, '/grant:r',
-        '*S-1-5-18:F', '*S-1-5-32-544:F')
-    Invoke-Checked icacls.exe @($hostKey, '/setowner', '*S-1-5-32-544')
 
     $cfg = Join-Path $testRoot 'windows_sshd_config'
     $serverLog = Join-Path $logRoot 'windows-sshd.log'
@@ -245,16 +234,14 @@ function Start-WindowsSshd([string]$AuthorizedKeys) {
 Port $windowsPort
 ListenAddress 0.0.0.0
 PidFile $testRoot/windows-sshd.pid
-HostKey $hostKey
 LogLevel DEBUG3
 GSSAPIAuthentication yes
 GSSAPIKeyExchange yes
 GSSAPIKexAlgorithms gss-curve25519-sha256-
 GSSAPIStrictAcceptorCheck no
-PubkeyAuthentication yes
+PubkeyAuthentication no
 PasswordAuthentication no
 KbdInteractiveAuthentication no
-AuthorizedKeysFile $AuthorizedKeys
 PermitRootLogin no
 AllowUsers $userName
 StrictModes no
@@ -298,7 +285,7 @@ function Collect-InteropLogs() {
 }
 
 try {
-    foreach ($name in @('ssh.exe', 'sshd.exe', 'ssh-keygen.exe')) {
+    foreach ($name in @('ssh.exe', 'sshd.exe')) {
         $path = Join-Path $buildDir $name
         if (-not (Test-Path $path)) {
             throw "missing Windows build output: $path"
@@ -437,11 +424,8 @@ try {
     Add-LocalGroupMember -Group 'Users' -Member $userName `
         -ErrorAction SilentlyContinue
 
-    $authorizedKeys = Join-Path $testRoot 'windows_authorized_keys'
-    & wsl.exe -u root -- cat "$linuxWork/linux-to-windows-ed25519.pub" |
-        Set-Content -Path $authorizedKeys -Encoding ASCII
     Write-Output 'Starting Windows sshd test peer'
-    Start-WindowsSshd -AuthorizedKeys $authorizedKeys
+    Start-WindowsSshd
 
     Write-Output 'Running Debian client to Windows sshd GSS KEX test'
     & wsl.exe -u root -- env "USER_PASSWORD=$userPassword" `
