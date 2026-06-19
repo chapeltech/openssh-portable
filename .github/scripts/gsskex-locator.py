@@ -236,6 +236,46 @@ class KdcUdpProxyHandler(socketserver.BaseRequestHandler):
         sock.sendto(response, self.client_address)
 
 
+def read_exact(sock, length):
+    data = bytearray()
+    while len(data) < length:
+        chunk = sock.recv(length - len(data))
+        if not chunk:
+            return None
+        data.extend(chunk)
+    return bytes(data)
+
+
+class KdcTcpProxyHandler(socketserver.BaseRequestHandler):
+    def handle(self):
+        server = self.server
+        logging.info("KDC TCP proxy connection from %s", self.client_address)
+        with socket.create_connection(
+            (server.target_host, server.target_port), timeout=5) as upstream:
+            self.request.settimeout(10)
+            upstream.settimeout(10)
+            while True:
+                header = read_exact(self.request, 4)
+                if header is None:
+                    return
+                length = struct.unpack("!I", header)[0]
+                data = read_exact(self.request, length)
+                if data is None:
+                    return
+                logging.info("KDC TCP proxy request %s bytes", length)
+                upstream.sendall(header + data)
+
+                response_header = read_exact(upstream, 4)
+                if response_header is None:
+                    return
+                response_length = struct.unpack("!I", response_header)[0]
+                response = read_exact(upstream, response_length)
+                if response is None:
+                    return
+                logging.info("KDC TCP proxy response %s bytes", response_length)
+                self.request.sendall(response_header + response)
+
+
 class ThreadedUdpServer(socketserver.ThreadingMixIn, socketserver.UDPServer):
     allow_reuse_address = True
 
@@ -287,7 +327,11 @@ def main():
         kdc_udp = ThreadedUdpServer((listen, 88), KdcUdpProxyHandler)
         kdc_udp.target_host = args.kdc_udp_target
         kdc_udp.target_port = args.kdc_udp_port
+        kdc_tcp = ThreadedTcpServer((listen, 88), KdcTcpProxyHandler)
+        kdc_tcp.target_host = args.kdc_udp_target
+        kdc_tcp.target_port = args.kdc_udp_port
         servers.append(kdc_udp)
+        servers.append(kdc_tcp)
 
     for server in servers:
         threading.Thread(target=server.serve_forever, daemon=True).start()
