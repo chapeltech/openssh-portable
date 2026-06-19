@@ -114,9 +114,17 @@ EOF
 		--realm-max-renewable-life=1week "$REALM"
 	kadmin -l add --use-defaults --password="$USER_PASSWORD" "$USER_NAME"
 	kadmin -l add --use-defaults --random-key "host/$LINUX_HOST"
-	kadmin -l add --use-defaults --password="$COMPUTER_PASSWORD" \
-		"host/$WINDOWS_HOST"
-	if [ -n "$win_computer" ]; then
+	if [ -n "$win_computer" ] && [ "$WINDOWS_HOST" = "$win_computer" ]; then
+		kadmin -l add --use-defaults --password="$COMPUTER_PASSWORD" \
+			"$win_computer$"
+		kadmin -l rename "$win_computer$" "host/$WINDOWS_HOST"
+		kadmin -l add --use-defaults --password="$COMPUTER_PASSWORD" \
+			"$win_computer$"
+	else
+		kadmin -l add --use-defaults --password="$COMPUTER_PASSWORD" \
+			"host/$WINDOWS_HOST"
+	fi
+	if [ -n "$win_computer" ] && [ "$win_computer" != "$WINDOWS_HOST" ]; then
 		kadmin -l add --use-defaults --password="$COMPUTER_PASSWORD" \
 			"$win_computer$" || true
 		kadmin -l add --use-defaults --password="$COMPUTER_PASSWORD" \
