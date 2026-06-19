@@ -50,6 +50,7 @@ function Configure-WindowsKerberos([string]$ComputerHost) {
     Invoke-Ksetup -Arguments @('/addhosttorealmmap', $ComputerHost, $realm)
     Invoke-Ksetup -Arguments @('/addhosttorealmmap',
         (".$realm").ToLowerInvariant(), $realm)
+    Invoke-Ksetup -Arguments @('/mapuser', $userPrincipal, $userName)
     Invoke-Ksetup -Arguments @('/setcomputerpassword', $computerPassword)
     & ksetup.exe /dumpstate 2>&1 |
         Out-File -FilePath (Join-Path $logRoot 'ksetup.log') -Append `
