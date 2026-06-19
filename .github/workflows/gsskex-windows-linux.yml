@@ -1,0 +1,81 @@
+name: GSS KEX Windows/Linux interop
+
+on:
+  push:
+    branches:
+      - build-release
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  interop:
+    name: Windows/Linux Heimdal GSS KEX
+    runs-on: windows-2022
+    timeout-minutes: 90
+    env:
+      BUILD_ARCH: x64
+      BUILD_CONFIGURATION: Release
+
+    steps:
+      - name: Disable checkout CRLF conversion
+        shell: pwsh
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      - name: Set up WSL Debian
+        uses: Vampire/setup-wsl@v7
+        with:
+          distribution: Debian-13
+          use-cache: false
+          additional-packages: >-
+            autoconf automake build-essential ca-certificates libedit-dev
+            libssl-dev pkg-config rsync zlib1g-dev heimdal-clients
+            heimdal-dev heimdal-kdc
+
+      - name: Prepare vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vcpkgRoot = Join-Path $env:RUNNER_TEMP 'vcpkg'
+          git clone https://github.com/microsoft/vcpkg $vcpkgRoot
+          & "$vcpkgRoot\bootstrap-vcpkg.bat" -disableMetrics
+          & "$vcpkgRoot\vcpkg.exe" integrate install
+          "VCPKG_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Cache vcpkg outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.VCPKG_ROOT }}\downloads
+            contrib\win32\openssh\vcpkg_installed
+          key: gsskex-interop-${{ runner.os }}-${{ env.BUILD_ARCH }}-${{ hashFiles('contrib/win32/openssh/vcpkg.json', 'contrib/win32/openssh/vcpkg_triplets/*.cmake', 'contrib/win32/openssh/vcpkg_overlay_ports/**') }}
+          restore-keys: |
+            gsskex-interop-${{ runner.os }}-${{ env.BUILD_ARCH }}-
+            windows-native-${{ runner.os }}-${{ env.BUILD_ARCH }}-
+
+      - name: Build native Windows OpenSSH
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module "$PWD\contrib\win32\openssh\OpenSSHBuildHelper.psm1" -Force
+          Start-OpenSSHBuild `
+            -NativeHostArch $env:BUILD_ARCH `
+            -Configuration $env:BUILD_CONFIGURATION `
+            -Verbose
+
+      - name: Run Windows/Linux GSS KEX interop test
+        shell: pwsh
+        run: .\.github\scripts\gsskex-wsl-interop.ps1
+
+      - name: Upload GSS KEX interop logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gsskex-windows-linux-logs
+          path: |
+            gsskex-interop-logs/**
+            contrib/win32/openssh/OpenSSHReleasex64.log
+          if-no-files-found: ignore
