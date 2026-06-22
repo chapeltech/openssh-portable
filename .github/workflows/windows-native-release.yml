@@ -1,0 +1,157 @@
+name: Windows native release
+
+on:
+  push:
+    branches:
+      - gssapi-kex-ci
+  workflow_dispatch:
+    inputs:
+      arch:
+        description: Native Windows architecture to build.
+        required: true
+        default: x64
+        type: choice
+        options:
+          - x64
+          - x86
+          - arm64
+          - arm
+      configuration:
+        description: MSBuild configuration.
+        required: true
+        default: Release
+        type: choice
+        options:
+          - Release
+          - Debug
+      release_tag:
+        description: Optional existing GitHub release tag to upload the zip to.
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: "${{ inputs.configuration || 'Release' }} ${{ inputs.arch || 'x64' }}"
+    runs-on: windows-2022
+    env:
+      BUILD_ARCH: ${{ inputs.arch || 'x64' }}
+      BUILD_CONFIGURATION: ${{ inputs.configuration || 'Release' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vcpkgRoot = Join-Path $env:RUNNER_TEMP 'vcpkg'
+          git clone https://github.com/microsoft/vcpkg $vcpkgRoot
+          & "$vcpkgRoot\bootstrap-vcpkg.bat" -disableMetrics
+          & "$vcpkgRoot\vcpkg.exe" integrate install
+          "VCPKG_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Cache vcpkg outputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.VCPKG_ROOT }}\downloads
+            contrib\win32\openssh\vcpkg_installed
+          key: windows-native-${{ runner.os }}-${{ env.BUILD_ARCH }}-${{ hashFiles('contrib/win32/openssh/vcpkg.json', 'contrib/win32/openssh/vcpkg_triplets/*.cmake', 'contrib/win32/openssh/vcpkg_overlay_ports/**') }}
+          restore-keys: |
+            windows-native-${{ runner.os }}-${{ env.BUILD_ARCH }}-
+
+      - name: Build native OpenSSH
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module "$PWD\contrib\win32\openssh\OpenSSHBuildHelper.psm1" -Force
+          Start-OpenSSHBuild `
+            -NativeHostArch $env:BUILD_ARCH `
+            -Configuration $env:BUILD_CONFIGURATION `
+            -Verbose
+
+      - name: Package runtime binaries
+        id: package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $arch = $env:BUILD_ARCH
+          $configuration = $env:BUILD_CONFIGURATION
+          $platform = switch ($arch.ToLowerInvariant()) {
+            'x86' { 'Win32'; break }
+            'arm64' { 'ARM64'; break }
+            'arm' { 'ARM'; break }
+            default { 'x64'; break }
+          }
+          $packageArch = switch ($arch.ToLowerInvariant()) {
+            'x86' { 'win32'; break }
+            'arm64' { 'arm64'; break }
+            'arm' { 'arm'; break }
+            default { 'win64'; break }
+          }
+
+          $buildDir = Join-Path $PWD "bin\$platform\$configuration"
+          if (-not (Test-Path $buildDir)) {
+            throw "build output directory not found: $buildDir"
+          }
+
+          $artifactRoot = Join-Path $PWD 'artifacts'
+          $runtimeDir = Join-Path $artifactRoot "ssh-gsskex-$packageArch"
+          $zipPath = Join-Path $artifactRoot "ssh-gsskex-$packageArch.zip"
+          Remove-Item $runtimeDir -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $runtimeDir -Force | Out-Null
+
+          Get-ChildItem $buildDir -File |
+            Where-Object { $_.Extension -in '.exe', '.dll' } |
+            Copy-Item -Destination $runtimeDir -Force
+
+          $libcrypto = Join-Path $runtimeDir 'libcrypto.dll'
+          if (-not (Test-Path $libcrypto)) {
+            $triplet = "$arch-custom"
+            $candidate = Join-Path $PWD "contrib\win32\openssh\vcpkg_installed\$triplet\$triplet\bin\libcrypto.dll"
+            if (Test-Path $candidate) {
+              Copy-Item $candidate -Destination $runtimeDir -Force
+            }
+          }
+
+          $runtimeFiles = Get-ChildItem $runtimeDir -File
+          if (-not $runtimeFiles) {
+            throw "no runtime files were copied from $buildDir"
+          }
+          $debugFiles = $runtimeFiles |
+            Where-Object { $_.Extension -in '.pdb', '.ilk', '.iobj', '.ipdb' }
+          if ($debugFiles) {
+            throw "debug files were included unexpectedly: $($debugFiles.Name -join ', ')"
+          }
+
+          Compress-Archive -Path (Join-Path $runtimeDir '*') -DestinationPath $zipPath -Force
+          $relativeZip = "artifacts/ssh-gsskex-$packageArch.zip"
+          "zip_path=$relativeZip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "artifact_name=ssh-gsskex-$packageArch" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Upload runtime zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.artifact_name }}
+          path: ${{ steps.package.outputs.zip_path }}
+          if-no-files-found: error
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-native-${{ env.BUILD_ARCH }}-${{ env.BUILD_CONFIGURATION }}-build-log
+          path: contrib/win32/openssh/OpenSSH${{ env.BUILD_CONFIGURATION }}${{ env.BUILD_ARCH }}.log
+          if-no-files-found: ignore
+
+      - name: Attach zip to GitHub release
+        if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          files: ${{ steps.package.outputs.zip_path }}
